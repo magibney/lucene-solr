@@ -17,17 +17,26 @@
 package org.apache.lucene.index;
 
 
+import com.carrotsearch.hppc.IntObjectHashMap;
+import com.carrotsearch.hppc.IntObjectScatterMap;
+import com.carrotsearch.hppc.cursors.IntObjectCursor;
 import java.io.IOException;
+import org.apache.lucene.analysis.tokenattributes.PayloadAttribute;
 
 import org.apache.lucene.analysis.tokenattributes.TermFrequencyAttribute;
 import org.apache.lucene.analysis.tokenattributes.TermToBytesRefAttribute;
+import static org.apache.lucene.search.spans.TermSpans.ENCODE_LOOKAHEAD;
+import static org.apache.lucene.search.spans.TermSpans.MAGIC_NUMBER;
+import static org.apache.lucene.search.spans.TermSpans.MAGIC_STABLE_LENGTH;
 import org.apache.lucene.util.ByteBlockPool;
+import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefHash.BytesStartArray;
 import org.apache.lucene.util.BytesRefHash;
 import org.apache.lucene.util.Counter;
 import org.apache.lucene.util.IntBlockPool;
 
 abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
+
   private static final int HASH_INIT_SIZE = 4;
 
   final TermsHash termsHash;
@@ -74,6 +83,7 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
 
   void reset() {
     bytesHash.clear(false);
+    maxPosLen = 0;
     if (nextPerField != null) {
       nextPerField.reset();
     }
@@ -106,39 +116,116 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
   // this API.
   public void add(int textStart) throws IOException {
     int termID = bytesHash.addByPoolOffset(textStart);
-    if (termID >= 0) {      // New posting
-      // First time we are seeing this token since we last
-      // flushed the hash.
-      // Init stream slices
-      if (numPostingInt + intPool.intUpto > IntBlockPool.INT_BLOCK_SIZE) {
-        intPool.nextBuffer();
+    addInternal(termID);
+  }
+
+  private void addInternal(int termID) throws IOException {
+    if (termID >= 0) {// New posting
+      bytesHash.byteStart(termID);
+      if (indexLookahead(fieldState.payloadAttribute)) {
+        stateBuffer.put(termID, captureInvertFieldState.captureState(fieldState, true, null));
+      } else {
+        initStreamSlices(termID);
+        newTerm(termID);
       }
+    } else if (indexLookahead == IndexLookahead.TRUE) {
+      final CapturedFieldInvertState.State previousState = stateBuffer.get(termID = ~termID);
+      if (previousState != null
+          && previousState.firstInSegment) {
+        initStreamSlices(termID);
+        CapturedFieldInvertState.State newState = captureInvertFieldState.captureState(fieldState, false, previousState);
+        stateBuffer.put(termID, newState);
+        previousState.restoreState(fieldState, newState.position, false);
+        newTerm(termID);
+        newState.restoreState(fieldState);
 
-      if (ByteBlockPool.BYTE_BLOCK_SIZE - bytePool.byteUpto < numPostingInt*ByteBlockPool.FIRST_LEVEL_SIZE) {
-        bytePool.nextBuffer();
+      } else {
+        CapturedFieldInvertState.State newState = captureInvertFieldState.captureState(fieldState, false, previousState);
+        stateBuffer.put(termID, newState);
+        if (previousState != null) {
+          updateStreamSlices(termID);
+          previousState.restoreState(fieldState, newState.position, false);
+          addTerm(termID);
+          newState.restoreState(fieldState);
+        }
       }
-
-      intUptos = intPool.buffer;
-      intUptoStart = intPool.intUpto;
-      intPool.intUpto += streamCount;
-
-      postingsArray.intStarts[termID] = intUptoStart + intPool.intOffset;
-
-      for(int i=0;i<streamCount;i++) {
-        final int upto = bytePool.newSlice(ByteBlockPool.FIRST_LEVEL_SIZE);
-        intUptos[intUptoStart+i] = upto + bytePool.byteOffset;
-      }
-      postingsArray.byteStarts[termID] = intUptos[intUptoStart];
-
-      newTerm(termID);
-
     } else {
-      termID = (-termID)-1;
-      int intStart = postingsArray.intStarts[termID];
-      intUptos = intPool.buffers[intStart >> IntBlockPool.INT_BLOCK_SHIFT];
-      intUptoStart = intStart & IntBlockPool.INT_BLOCK_MASK;
+      termID = ~termID;
+      updateStreamSlices(termID);
       addTerm(termID);
     }
+  }
+
+  private final IntObjectHashMap<CapturedFieldInvertState.State> stateBuffer = new IntObjectScatterMap<>();
+  private final CapturedFieldInvertState captureInvertFieldState = new CapturedFieldInvertState();
+  private int maxPosLen = 0;
+
+  protected static enum IndexLookahead { UNINITIALZED, TRUE, FALSE };
+  protected IndexLookahead indexLookahead = IndexLookahead.UNINITIALZED;
+
+  protected boolean indexLookahead(PayloadAttribute payloadAtt) {
+    switch (indexLookahead) {
+      case TRUE:
+        return true;
+      case FALSE:
+        return false;
+      default:
+        if (payloadAtt == null) {
+          indexLookahead = IndexLookahead.FALSE;
+          return false;
+        } else {
+          BytesRef payload = payloadAtt.getPayload();
+          if (payload == null || payload.length - payload.offset < MAGIC_NUMBER.length) {
+            indexLookahead = IndexLookahead.FALSE;
+            return false;
+          } else {
+            final byte[] payloadBytes = payload.bytes;
+            int compareIdx = payload.offset;
+            for (int i = 0; i < MAGIC_STABLE_LENGTH; i++) {
+              if (MAGIC_NUMBER[i] != payloadBytes[compareIdx++]) {
+                indexLookahead = IndexLookahead.FALSE;
+                return false;
+              }
+            }
+            switch (payloadBytes[MAGIC_STABLE_LENGTH]) {
+              case ENCODE_LOOKAHEAD:
+                indexLookahead = IndexLookahead.TRUE;
+                return true;
+              default:
+                indexLookahead = IndexLookahead.FALSE;
+                return false;
+            }
+          }
+        }
+    }
+  }
+
+  private void initStreamSlices(int termID) {
+    if (numPostingInt + intPool.intUpto > IntBlockPool.INT_BLOCK_SIZE) {
+      intPool.nextBuffer();
+    }
+
+    if (ByteBlockPool.BYTE_BLOCK_SIZE - bytePool.byteUpto < numPostingInt * ByteBlockPool.FIRST_LEVEL_SIZE) {
+      bytePool.nextBuffer();
+    }
+
+    intUptos = intPool.buffer;
+    intUptoStart = intPool.intUpto;
+    intPool.intUpto += streamCount;
+
+    postingsArray.intStarts[termID] = intUptoStart + intPool.intOffset;
+
+    for (int i = 0; i < streamCount; i++) {
+      final int upto = bytePool.newSlice(ByteBlockPool.FIRST_LEVEL_SIZE);
+      intUptos[intUptoStart + i] = upto + bytePool.byteOffset;
+    }
+    postingsArray.byteStarts[termID] = intUptos[intUptoStart];
+  }
+
+  private void updateStreamSlices(int termID) {
+    int intStart = postingsArray.intStarts[termID];
+    intUptos = intPool.buffers[intStart >> IntBlockPool.INT_BLOCK_SHIFT];
+    intUptoStart = intStart & IntBlockPool.INT_BLOCK_MASK;
   }
 
   /** Called once per inverted token.  This is the primary
@@ -152,41 +239,10 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
       
     //System.out.println("add term=" + termBytesRef.utf8ToString() + " doc=" + docState.docID + " termID=" + termID);
 
-    if (termID >= 0) {// New posting
-      bytesHash.byteStart(termID);
-      // Init stream slices
-      if (numPostingInt + intPool.intUpto > IntBlockPool.INT_BLOCK_SIZE) {
-        intPool.nextBuffer();
-      }
-
-      if (ByteBlockPool.BYTE_BLOCK_SIZE - bytePool.byteUpto < numPostingInt*ByteBlockPool.FIRST_LEVEL_SIZE) {
-        bytePool.nextBuffer();
-      }
-
-      intUptos = intPool.buffer;
-      intUptoStart = intPool.intUpto;
-      intPool.intUpto += streamCount;
-
-      postingsArray.intStarts[termID] = intUptoStart + intPool.intOffset;
-
-      for(int i=0;i<streamCount;i++) {
-        final int upto = bytePool.newSlice(ByteBlockPool.FIRST_LEVEL_SIZE);
-        intUptos[intUptoStart+i] = upto + bytePool.byteOffset;
-      }
-      postingsArray.byteStarts[termID] = intUptos[intUptoStart];
-
-      newTerm(termID);
-
-    } else {
-      termID = (-termID)-1;
-      int intStart = postingsArray.intStarts[termID];
-      intUptos = intPool.buffers[intStart >> IntBlockPool.INT_BLOCK_SHIFT];
-      intUptoStart = intStart & IntBlockPool.INT_BLOCK_MASK;
-      addTerm(termID);
-    }
+    addInternal(termID);
 
     if (doNextCall) {
-      nextPerField.add(postingsArray.textStarts[termID]);
+      nextPerField.add(postingsArray.textStarts[termID < 0 ? ~termID : termID]);
     }
   }
 
@@ -274,6 +330,66 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
   @Override
   public int compareTo(TermsHashPerField other) {
     return fieldInfo.name.compareTo(other.fieldInfo.name);
+  }
+
+  protected final int OVERHEAD_TO_ENSURE_STABLE_ADDRESS = 3;
+
+  void allocateMaxPositionLengthPlaceholder(int stream) {
+    // we know we can atomically write 4 bytes and get a valid candidate position.
+    byte testByte = 0;
+    for (int i = 0; i < Integer.BYTES; i++) {
+      writeByte(stream, ++testByte);
+    }
+    int candidateUpto = intUptos[intUptoStart + stream];
+    final BytesRef firstSlice = fieldState.firstMaxPositionLengthSlice;
+    firstSlice.bytes = bytePool.buffers[candidateUpto >> ByteBlockPool.BYTE_BLOCK_SHIFT];
+    firstSlice.offset = (candidateUpto & ByteBlockPool.BYTE_BLOCK_MASK) - Integer.BYTES;
+
+    // now we have to write 3 more bytes to in case the bytepool shifts the space we already allocated
+    for (int i = 1; i <= OVERHEAD_TO_ENSURE_STABLE_ADDRESS; i++) {
+      writeByte(stream, (byte)0);
+      final int probeUpto = intUptos[intUptoStart + stream];
+      if (probeUpto > candidateUpto + i) {
+        // spread across 2 slices
+        final BytesRef secondSlice = fieldState.secondMaxPositionLengthSlice;
+        secondSlice.bytes = bytePool.buffers[probeUpto >> ByteBlockPool.BYTE_BLOCK_SHIFT];
+        secondSlice.offset = (probeUpto & ByteBlockPool.BYTE_BLOCK_MASK) - Integer.BYTES;
+        secondSlice.length = Integer.BYTES - i;
+        firstSlice.length = i;
+        intUptos[intUptoStart + stream] -= i;
+        return;
+      }
+    }
+    intUptos[intUptoStart + stream] -= OVERHEAD_TO_ENSURE_STABLE_ADDRESS;
+    // stable all in one slice
+    firstSlice.length = Integer.BYTES;
+  }
+
+  void flush() throws IOException {
+    if (indexLookahead == IndexLookahead.FALSE) {
+      return;
+    }
+    // flush buffer
+    for (IntObjectCursor<CapturedFieldInvertState.State> entry : stateBuffer) {
+      final int termID = entry.key;
+      final CapturedFieldInvertState.State previousState = entry.value;
+      if (previousState.firstInSegment) {
+        initStreamSlices(termID);
+        previousState.restoreState(fieldState, Integer.MAX_VALUE, true);
+        newTerm(termID);
+      } else {
+        updateStreamSlices(termID);
+        previousState.restoreState(fieldState, Integer.MAX_VALUE, true);
+        addTerm(termID);
+      }
+    }
+    // reset
+    captureInvertFieldState.resetPool();
+    stateBuffer.clear();
+    maxPosLen = 0;
+    if (doNextCall) {
+      nextPerField.flush();
+    }
   }
 
   /** Finish adding all instances of this field to the

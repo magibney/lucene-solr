@@ -84,14 +84,32 @@ public class SpanTermQuery extends SpanQuery {
     return new SpanTermWeight(context, searcher, scoreMode.needsScores() ? Collections.singletonMap(term, context) : null, boost);
   }
 
+  public SpanWeight createWeight(IndexSearcher searcher, boolean needsScores, float boost, TermsEnum[] sharedTermsEnum) throws IOException {
+    final TermContext context;
+    final IndexReaderContext topContext = searcher.getTopReaderContext();
+    if (termContext == null || termContext.wasBuiltFor(topContext) == false) {
+      context = TermContext.build(topContext, term);
+    }
+    else {
+      context = termContext;
+    }
+    return new SpanTermWeight(context, searcher, needsScores ? Collections.singletonMap(term, context) : null, boost, sharedTermsEnum);
+  }
+
   public class SpanTermWeight extends SpanWeight {
 
     final TermStates termStates;
+    final TermsEnum[] sharedTermsEnum;
 
-    public SpanTermWeight(TermStates termStates, IndexSearcher searcher, Map<Term, TermStates> terms, float boost) throws IOException {
+    public SpanTermWeight(TermStates termStates, IndexSearcher searcher, Map<Term, TermContext> terms, float boost) throws IOException {
+      this(termContext, searcher, terms, boost, null);
+    }
+
+    public SpanTermWeight(TermStates termStates, IndexSearcher searcher, Map<Term, TermStates> terms, float boost, TermsEnum[] sharedTermsEnum) throws IOException {
       super(SpanTermQuery.this, searcher, terms, boost);
       this.termStates = termStates;
       assert termStates != null : "TermStates must not be null";
+      this.sharedTermsEnum = sharedTermsEnum;
     }
 
     @Override
@@ -119,19 +137,27 @@ public class SpanTermQuery extends SpanQuery {
         assert context.reader().docFreq(term) == 0 : "no termstate found but term exists in reader term=" + term;
         return null;
       }
+      final TermsEnum termsEnum;
+      if (sharedTermsEnum != null) {
+        termsEnum = sharedTermsEnum[context.ord];
+        if (termsEnum == null) {
+          return null;
+        }
+      } else {
+        final Terms terms = context.reader().terms(term.field());
+        if (terms == null)
+          return null;
+        if (terms.hasPositions() == false)
+          throw new IllegalStateException("field \"" + term.field() + "\" was indexed without position data; cannot run SpanTermQuery (term=" + term.text() + ")");
 
-      final Terms terms = context.reader().terms(term.field());
-      if (terms == null)
-        return null;
-      if (terms.hasPositions() == false)
-        throw new IllegalStateException("field \"" + term.field() + "\" was indexed without position data; cannot run SpanTermQuery (term=" + term.text() + ")");
-
-      final TermsEnum termsEnum = terms.iterator();
+        termsEnum = terms.iterator();
+      }
       termsEnum.seekExact(term.bytes(), state);
 
-      final PostingsEnum postings = termsEnum.postings(null, requiredPostings.getRequiredPostings());
+      final int postingsFlags = requiredPostings.getRequiredPostings() | PostingsEnum.PAYLOADS;
+      final PostingsEnum postings = termsEnum.postings(null, postingsFlags);
       float positionsCost = termPositionsCost(termsEnum) * PHRASE_TO_SPAN_TERM_POSITIONS_COST;
-      return new TermSpans(getSimScorer(context), postings, term, positionsCost);
+      return new TermSpans(getSimScorer(context), postings, term, positionsCost, postingsFlags);
     }
   }
 

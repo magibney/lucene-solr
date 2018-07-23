@@ -30,9 +30,12 @@ import java.util.TreeMap;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.apache.lucene.analysis.tokenattributes.FlagsAttribute;
+import org.apache.lucene.analysis.tokenattributes.KeywordAttribute;
 import org.apache.lucene.analysis.tokenattributes.OffsetAttribute;
 import org.apache.lucene.analysis.tokenattributes.PayloadAttribute;
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
+import org.apache.lucene.analysis.tokenattributes.PositionLengthAttribute;
+import org.apache.lucene.analysis.tokenattributes.TermFrequencyAttribute;
 import org.apache.lucene.analysis.tokenattributes.TermToBytesRefAttribute;
 import org.apache.lucene.analysis.tokenattributes.TypeAttribute;
 import org.apache.lucene.document.Field;
@@ -45,6 +48,7 @@ import org.noggit.ObjectBuilder;
 import org.apache.solr.common.util.Base64;
 import org.apache.solr.schema.PreAnalyzedField.ParseResult;
 import org.apache.solr.schema.PreAnalyzedField.PreAnalyzedParser;
+import static org.apache.solr.schema.PreAnalyzedField.addCachedAttribute;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -61,13 +65,22 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
   public static final String OFFSET_START_KEY = "s";
   public static final String OFFSET_END_KEY = "e";
   public static final String POSINCR_KEY = "i";
+  public static final String POSLENGTH_KEY = "l";
+  public static final String TERM_FREQUENCY_KEY = "q";
+  public static final String KEYWORD_KEY = "k";
   public static final String PAYLOAD_KEY = "p";
   public static final String TYPE_KEY = "y";
   public static final String FLAGS_KEY = "f";
 
   @SuppressWarnings("unchecked")
   @Override
-  public ParseResult parse(Reader reader, AttributeSource parent)
+  public ParseResult parse(Reader reader, AttributeSource parent) throws IOException {
+    return parse(reader, parent, null);
+  }
+
+  @SuppressWarnings("unchecked")
+  @Override
+  public ParseResult parse(Reader reader, AttributeSource parent, AttributeSource attributeCache)
       throws IOException {
     ParseResult res = new ParseResult();
     StringBuilder sb = new StringBuilder();
@@ -119,7 +132,7 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
       for (Entry<String,Object> e : tok.entrySet()) {
         String key = e.getKey();
         if (key.equals(TOKEN_KEY)) {
-          CharTermAttribute catt = parent.addAttribute(CharTermAttribute.class);
+          CharTermAttribute catt = addCachedAttribute(parent, attributeCache, CharTermAttribute.class);
           String str = String.valueOf(e.getValue());
           catt.append(str);
           len = str.length();
@@ -161,13 +174,51 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
               LOG.warn("Invalid " + POSINCR_KEY + " attribute, skipped: '" + obj + "'");
             }
           }
-          PositionIncrementAttribute patt = parent.addAttribute(PositionIncrementAttribute.class);
+          PositionIncrementAttribute patt = addCachedAttribute(parent, attributeCache, PositionIncrementAttribute.class);
           patt.setPositionIncrement(posIncr);
+        } else if (key.equals(POSLENGTH_KEY)) {
+          Object obj = e.getValue();
+          int posLength = 1;
+          if (obj instanceof Number) {
+            posLength = ((Number)obj).intValue();
+          } else {
+            try {
+              posLength = Integer.parseInt(String.valueOf(obj));
+            } catch (NumberFormatException nfe) {
+              LOG.warn("Invalid " + POSLENGTH_KEY + " attribute, skipped: '" + obj + "'");
+            }
+          }
+          PositionLengthAttribute platt = addCachedAttribute(parent, attributeCache, PositionLengthAttribute.class);
+          platt.setPositionLength(posLength);
+        } else if (key.equals(TERM_FREQUENCY_KEY)) {
+          Object obj = e.getValue();
+          final int termFrequency;
+          try {
+            if (obj instanceof Number) {
+              termFrequency = ((Number)obj).intValue();
+            } else {
+              termFrequency = Integer.parseInt(String.valueOf(obj));
+            }
+            TermFrequencyAttribute tfAtt = addCachedAttribute(parent, attributeCache, TermFrequencyAttribute.class);
+            tfAtt.setTermFrequency(termFrequency);
+          } catch (NumberFormatException nfe) {
+            LOG.warn("Invalid " + TERM_FREQUENCY_KEY + " attribute, skipped: '" + obj + "'");
+          }
+        } else if (key.equals(KEYWORD_KEY)) {
+          Object obj = e.getValue();
+          final boolean isKeyword;
+          if (obj instanceof Boolean) {
+            isKeyword = ((Boolean)obj).booleanValue();
+          } else {
+            isKeyword = Boolean.parseBoolean(String.valueOf(obj));
+          }
+          KeywordAttribute keywordAtt = addCachedAttribute(parent, attributeCache, KeywordAttribute.class);
+          keywordAtt.setKeyword(isKeyword);
         } else if (key.equals(PAYLOAD_KEY)) {
           String str = String.valueOf(e.getValue());
           if (str.length() > 0) {
             byte[] data = Base64.base64ToByteArray(str);
-            PayloadAttribute p = parent.addAttribute(PayloadAttribute.class);
+            PayloadAttribute p = addCachedAttribute(parent, attributeCache, PayloadAttribute.class);
             if (data != null && data.length > 0) {
               p.setPayload(new BytesRef(data));
             }
@@ -175,20 +226,20 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
         } else if (key.equals(FLAGS_KEY)) {
           try {
             int f = Integer.parseInt(String.valueOf(e.getValue()), 16);
-            FlagsAttribute flags = parent.addAttribute(FlagsAttribute.class);
+            FlagsAttribute flags = addCachedAttribute(parent, attributeCache, FlagsAttribute.class);
             flags.setFlags(f);
           } catch (NumberFormatException nfe) {
             LOG.warn("Invalid " + FLAGS_KEY + " attribute, skipped: '" + e.getValue() + "'");            
           }
         } else if (key.equals(TYPE_KEY)) {
-          TypeAttribute tattr = parent.addAttribute(TypeAttribute.class);
+          TypeAttribute tattr = addCachedAttribute(parent, attributeCache, TypeAttribute.class);
           tattr.setType(String.valueOf(e.getValue()));
         } else {
           LOG.warn("Unknown attribute, skipped: " + e.getKey() + "=" + e.getValue());
         }
       }
       // handle offset attr
-      OffsetAttribute offset = parent.addAttribute(OffsetAttribute.class);
+      OffsetAttribute offset = addCachedAttribute(parent, attributeCache, OffsetAttribute.class);
       if (!hasOffsetEnd && len > -1) {
         tokenEnd = tokenStart + len;
       }
@@ -252,6 +303,12 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
               }
             } else if (cl.isAssignableFrom(PositionIncrementAttribute.class)) {
               tok.put(POSINCR_KEY, ((PositionIncrementAttribute)att).getPositionIncrement());
+            } else if (cl.isAssignableFrom(PositionLengthAttribute.class)) {
+              tok.put(POSLENGTH_KEY, ((PositionLengthAttribute)att).getPositionLength());
+            } else if (cl.isAssignableFrom(TermFrequencyAttribute.class)) {
+              tok.put(TERM_FREQUENCY_KEY, ((TermFrequencyAttribute)att).getTermFrequency());
+            } else if (cl.isAssignableFrom(KeywordAttribute.class)) {
+              tok.put(KEYWORD_KEY, ((KeywordAttribute)att).isKeyword());
             } else if (cl.isAssignableFrom(TypeAttribute.class)) {
               tok.put(TYPE_KEY, ((TypeAttribute)att).type());
             } else {

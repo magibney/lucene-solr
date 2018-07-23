@@ -28,6 +28,8 @@ import java.util.Map;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.Tokenizer;
 import org.apache.lucene.analysis.tokenattributes.OffsetAttribute;
+import org.apache.lucene.analysis.tokenattributes.PayloadAttribute;
+import org.apache.lucene.analysis.tokenattributes.TermToBytesRefAttribute;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexableField;
@@ -35,7 +37,9 @@ import org.apache.lucene.queries.function.ValueSource;
 import org.apache.lucene.queries.function.valuesource.SortedSetFieldSource;
 import org.apache.lucene.search.SortField;
 import org.apache.lucene.search.SortedSetSelector;
+import org.apache.lucene.util.Attribute;
 import org.apache.lucene.util.AttributeFactory;
+import org.apache.lucene.util.AttributeImpl;
 import org.apache.lucene.util.AttributeSource.State;
 import org.apache.lucene.util.AttributeSource;
 import org.apache.solr.analysis.SolrAnalyzer;
@@ -215,6 +219,16 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
     public ParseResult parse(Reader reader, AttributeSource parent) throws IOException;
     
     /**
+     * Parse input.
+     * @param reader input to read from
+     * @param parent parent who will own the resulting states (tokens with attributes)
+     * @param attributeCache source so that common attributes are the same across invocations
+     * @return parse result, with possibly null stored and/or states fields.
+     * @throws IOException if a parsing error or IO error occurs
+     */
+    public ParseResult parse(Reader reader, AttributeSource parent, AttributeSource attributeCache) throws IOException;
+    
+    /**
      * Format a field so that the resulting String is valid for parsing with {@link #parse(Reader, AttributeSource)}.
      * @param f field instance
      * @return formatted string
@@ -280,6 +294,7 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
     private String stringValue = null;
     private byte[] binaryValue = null;
     private PreAnalyzedParser parser;
+    private final AttributeSource cachedAttributes;
     private IOException readerConsumptionException;
     private int lastEndOffset;
 
@@ -287,6 +302,7 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
       // we don't pack attributes: since we are used for (de)serialization and dont want bloat.
       super(AttributeFactory.DEFAULT_ATTRIBUTE_FACTORY);
       this.parser = parser;
+      this.cachedAttributes = new AttributeSource(this.getAttributeFactory());
     }
     
     public boolean hasTokenStream() {
@@ -327,6 +343,10 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
         throw e;
       }
       it = cachedStates.iterator();
+
+      // preload attributes cached in org.apache.lucene.index.FieldInvertState.setAttributeSource(AttributeSource attributeSource)
+      addCachedAttribute(this, cachedAttributes, TermToBytesRefAttribute.class);
+      addCachedAttribute(this, cachedAttributes, PayloadAttribute.class);
     }
 
     @Override
@@ -349,7 +369,7 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
       stringValue = null;
       binaryValue = null;
       try {
-        ParseResult res = parser.parse(reader, this);
+        ParseResult res = parser.parse(reader, this, cachedAttributes);
         if (res != null) {
           stringValue = res.str;
           binaryValue = res.bin;
@@ -364,11 +384,21 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
     }
   }
 
-  private static class PreAnalyzedAnalyzer extends SolrAnalyzer {
+  static <T extends Attribute> T addCachedAttribute(AttributeSource dest, AttributeSource cache, Class<T> attClass) {
+    T ret = (T) cache.addAttribute(attClass);
+    dest.addAttributeImpl((AttributeImpl)ret);
+    return ret;
+  }
+
+  public static class PreAnalyzedAnalyzer extends SolrAnalyzer {
     private PreAnalyzedParser parser;
 
     PreAnalyzedAnalyzer(PreAnalyzedParser parser) {
       this.parser = parser;
+    }
+
+    PreAnalyzedAnalyzer() {
+      this.parser = new JsonPreAnalyzedParser();
     }
 
     @Override
