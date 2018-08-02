@@ -18,4 +18,9 @@
 -->
 <ivy-module version="2.0">
   <info organisation="org.apache.lucene" module="analyzers-common"/>
+
+  <configurations defaultconfmapping="compile->master">
+    <conf name="compile" transitive="false"/>
+  </configurations>
+
 </ivy-module>
