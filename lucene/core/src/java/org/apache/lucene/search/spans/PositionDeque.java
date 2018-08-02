@@ -57,7 +57,7 @@ public class PositionDeque implements Iterable<Spans> {
   final PositionDeque prev;
   private final PositionDeque next;
   private final PositionDeque last;
-  private final int phraseIndex;
+  final int phraseIndex;
   private final boolean offsets;
   private Node[] nodeBuffer;
   private int tail = 0;
@@ -222,6 +222,15 @@ public class PositionDeque implements Iterable<Spans> {
     return ret;
   }
   
+  private boolean active = true;
+  boolean isActive() {
+    return active && driver.docID() != Spans.NO_MORE_DOCS;
+  }
+
+  void release() {
+    active = false;
+  }
+
   private static final class LocalArrayList<E> implements Iterator<E>, Collection<E> {
 
     private final ArrayCreator<E> arrayCreator;
@@ -828,6 +837,14 @@ public class PositionDeque implements Iterable<Spans> {
     
   }
   
+  private static final Comparator<Node> PHRASE_ORDER_COMPARATOR = new Comparator<Node>() {
+
+    @Override
+    public int compare(Node o1, Node o2) {
+      return Integer.compare(o2.phraseIndex, o1.phraseIndex);
+    }
+  };
+
   private static final class SpansEntryPerPosition extends SpansEntry {
 
     private int startPosition;
@@ -844,6 +861,9 @@ public class PositionDeque implements Iterable<Spans> {
       this.startPosition = startPosition;
       this.endPosition = endPosition;
       this.backing = backing;
+      if (backing != null) {
+        Arrays.sort(backing.data, 0, backing.size, PHRASE_ORDER_COMPARATOR);
+      }
       return this;
     }
     
@@ -2779,8 +2799,8 @@ public class PositionDeque implements Iterable<Spans> {
     }
   }
   
-  private final PriorityQueue<Node> minEndQ = new PriorityQueue(MIN_POS_COMPARATOR);
-  private final PriorityQueue<Node> maxEndQ = new PriorityQueue(MAX_POS_COMPARATOR);
+  private final PriorityQueue<Node> minEndQ = new PriorityQueue<>(MIN_POS_COMPARATOR);
+  private final PriorityQueue<Node> maxEndQ = new PriorityQueue<>(MAX_POS_COMPARATOR);
   
   private static final Comparator<Node> MIN_POS_COMPARATOR = new Comparator<Node>() {
 

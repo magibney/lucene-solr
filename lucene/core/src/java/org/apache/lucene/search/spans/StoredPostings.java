@@ -93,19 +93,11 @@ class StoredPostings extends PostingsEnum {
     BytesRef toStorePayload = toStore.getPayload();
     // only clone payload if not null; also ignore (for now) magic payloads currently used to carry lookahead and positionLength info
     this.payload = toStorePayload == null || TermSpans.isMagicPayload(toStorePayload) ? null : toStorePayload.clone();
-    assert this.payload == null;
     this.docID = toStore.docID();
-    assert toStore instanceof StoredPostings || !toStore.attributes().hasAttributes();
     this.position = position;
     this.positionLength = positionLength;
     this.term = term;
     return this;
-  }
-
-  @Override
-  public AttributeSource attributes() {
-    // couldn't find any examples of this being used. Vestigial?
-    throw new UnsupportedOperationException("Not supported");
   }
 
   @Override

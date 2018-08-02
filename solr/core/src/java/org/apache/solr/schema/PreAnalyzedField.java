@@ -20,6 +20,7 @@ import java.io.Reader;
 import java.io.StringReader;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.UndeclaredThrowableException;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -28,8 +29,6 @@ import java.util.Map;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.Tokenizer;
 import org.apache.lucene.analysis.tokenattributes.OffsetAttribute;
-import org.apache.lucene.analysis.tokenattributes.PayloadAttribute;
-import org.apache.lucene.analysis.tokenattributes.TermToBytesRefAttribute;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexableField;
@@ -219,16 +218,6 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
     public ParseResult parse(Reader reader, AttributeSource parent) throws IOException;
     
     /**
-     * Parse input.
-     * @param reader input to read from
-     * @param parent parent who will own the resulting states (tokens with attributes)
-     * @param attributeCache source so that common attributes are the same across invocations
-     * @return parse result, with possibly null stored and/or states fields.
-     * @throws IOException if a parsing error or IO error occurs
-     */
-    public ParseResult parse(Reader reader, AttributeSource parent, AttributeSource attributeCache) throws IOException;
-    
-    /**
      * Format a field so that the resulting String is valid for parsing with {@link #parse(Reader, AttributeSource)}.
      * @param f field instance
      * @return formatted string
@@ -285,6 +274,16 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
     return f;
   }
 
+  private static class CachingAttributeFactory extends AttributeFactory {
+
+    private final AttributeSource cachedAttributes = new AttributeSource(AttributeFactory.DEFAULT_ATTRIBUTE_FACTORY);
+
+    @Override
+    public AttributeImpl createAttributeInstance(Class<? extends Attribute> attClass) throws UndeclaredThrowableException {
+      return (AttributeImpl) cachedAttributes.addAttribute(attClass);
+    }
+
+  }
   /**
    * Token stream that works from a list of saved states.
    */
@@ -294,15 +293,13 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
     private String stringValue = null;
     private byte[] binaryValue = null;
     private PreAnalyzedParser parser;
-    private final AttributeSource cachedAttributes;
     private IOException readerConsumptionException;
     private int lastEndOffset;
 
     public PreAnalyzedTokenizer(PreAnalyzedParser parser) {
       // we don't pack attributes: since we are used for (de)serialization and dont want bloat.
-      super(AttributeFactory.DEFAULT_ATTRIBUTE_FACTORY);
+      super(new CachingAttributeFactory());
       this.parser = parser;
-      this.cachedAttributes = new AttributeSource(this.getAttributeFactory());
     }
     
     public boolean hasTokenStream() {
@@ -344,9 +341,9 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
       }
       it = cachedStates.iterator();
 
-      // preload attributes cached in org.apache.lucene.index.FieldInvertState.setAttributeSource(AttributeSource attributeSource)
-      addCachedAttribute(this, cachedAttributes, TermToBytesRefAttribute.class);
-      addCachedAttribute(this, cachedAttributes, PayloadAttribute.class);
+//      // preload attributes cached in org.apache.lucene.index.FieldInvertState.setAttributeSource(AttributeSource attributeSource)
+//      addAttribute(CharTermAttribute.class);
+//      addAttribute(PayloadAttribute.class);
     }
 
     @Override
@@ -369,7 +366,7 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
       stringValue = null;
       binaryValue = null;
       try {
-        ParseResult res = parser.parse(reader, this, cachedAttributes);
+        ParseResult res = parser.parse(reader, this);
         if (res != null) {
           stringValue = res.str;
           binaryValue = res.bin;
@@ -382,12 +379,6 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
         throw e; // rethrow
       }
     }
-  }
-
-  static <T extends Attribute> T addCachedAttribute(AttributeSource dest, AttributeSource cache, Class<T> attClass) {
-    T ret = (T) cache.addAttribute(attClass);
-    dest.addAttributeImpl((AttributeImpl)ret);
-    return ret;
   }
 
   public static class PreAnalyzedAnalyzer extends SolrAnalyzer {

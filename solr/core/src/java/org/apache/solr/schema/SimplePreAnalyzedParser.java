@@ -212,11 +212,6 @@ public final class SimplePreAnalyzedParser implements PreAnalyzedParser {
   }
 
   @Override
-  public ParseResult parse(Reader reader, AttributeSource parent, AttributeSource attributeCache) throws IOException {
-    throw new UnsupportedOperationException("attributeCache not implemented for "+getClass());
-  }
-
-  @Override
   public ParseResult parse(Reader reader, AttributeSource parent) throws IOException {
     ParseResult res = new ParseResult();
     StringBuilder sb = new StringBuilder();

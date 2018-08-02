@@ -32,6 +32,27 @@ interface IndexLookahead {
   static final int UNINITIALIZED_AT_SPANS = Integer.MIN_VALUE + 1;
   static final int NO_INDEX_LOOKAHEAD_IMPLEMENTED = Integer.MIN_VALUE;
 
+  static String valueToString(int value) {
+    switch (value) {
+      case UNKNOWN_AT_POSITION:
+        return "UNKNOWN_AT_POSITION";
+      case UNKNOWN_AT_DOC:
+        return "UNKNOWN_AT_DOC";
+      case UNKNOWN_AT_SPANS:
+        return "UNKNOWN_AT_SPANS";
+      case UNINITIALIZED_AT_POSITION:
+        return "UNINITIALIZED_AT_POSITION";
+      case UNINITIALIZED_AT_DOC:
+        return "UNINITIALIZED_AT_DOC";
+      case UNINITIALIZED_AT_SPANS:
+        return "UNINITIALIZED_AT_SPANS";
+      case NO_INDEX_LOOKAHEAD_IMPLEMENTED:
+        return "NO_INDEX_LOOKAHEAD_IMPLEMENTED";
+      default:
+        return Integer.toString(value);
+    }
+  }
+
   static final int MAX_SPECIAL_VALUE = UNKNOWN_AT_POSITION;
   static final int MIN_POSITION_LENGTH_CEILING_WITH_POSSIBLE_ENDPOSITION_DECREASE = 3;
 

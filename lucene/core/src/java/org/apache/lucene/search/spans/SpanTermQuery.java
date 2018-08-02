@@ -34,6 +34,7 @@ import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.ScoreMode;
+import org.apache.lucene.util.FixedBitSet;
 
 /** Matches spans containing a term.
  * This should not be used for terms that are indexed at position Integer.MAX_VALUE.
@@ -73,6 +74,10 @@ public class SpanTermQuery extends SpanQuery {
 
   @Override
   public SpanWeight createWeight(IndexSearcher searcher, ScoreMode scoreMode, float boost) throws IOException {
+    return createWeight(searcher, scoreMode, boost, null);
+  }
+
+  public SpanWeight createWeight(IndexSearcher searcher, ScoreMode scoreMode, float boost, TermsEnum[] sharedTermsEnum) throws IOException {
     final TermStates context;
     final IndexReaderContext topContext = searcher.getTopReaderContext();
     if (termStates == null || termStates.wasBuiltFor(topContext) == false) {
@@ -81,28 +86,17 @@ public class SpanTermQuery extends SpanQuery {
     else {
       context = termStates;
     }
-    return new SpanTermWeight(context, searcher, scoreMode.needsScores() ? Collections.singletonMap(term, context) : null, boost);
-  }
-
-  public SpanWeight createWeight(IndexSearcher searcher, boolean needsScores, float boost, TermsEnum[] sharedTermsEnum) throws IOException {
-    final TermContext context;
-    final IndexReaderContext topContext = searcher.getTopReaderContext();
-    if (termContext == null || termContext.wasBuiltFor(topContext) == false) {
-      context = TermContext.build(topContext, term);
-    }
-    else {
-      context = termContext;
-    }
-    return new SpanTermWeight(context, searcher, needsScores ? Collections.singletonMap(term, context) : null, boost, sharedTermsEnum);
+    return new SpanTermWeight(context, searcher, scoreMode.needsScores() ? Collections.singletonMap(term, context) : null, boost, sharedTermsEnum);
   }
 
   public class SpanTermWeight extends SpanWeight {
 
     final TermStates termStates;
     final TermsEnum[] sharedTermsEnum;
+    final FixedBitSet releasedShared; // only use with the first spans released for a given segment ord
 
-    public SpanTermWeight(TermStates termStates, IndexSearcher searcher, Map<Term, TermContext> terms, float boost) throws IOException {
-      this(termContext, searcher, terms, boost, null);
+    public SpanTermWeight(TermStates termStates, IndexSearcher searcher, Map<Term, TermStates> terms, float boost) throws IOException {
+      this(termStates, searcher, terms, boost, null);
     }
 
     public SpanTermWeight(TermStates termStates, IndexSearcher searcher, Map<Term, TermStates> terms, float boost, TermsEnum[] sharedTermsEnum) throws IOException {
@@ -110,6 +104,7 @@ public class SpanTermQuery extends SpanQuery {
       this.termStates = termStates;
       assert termStates != null : "TermStates must not be null";
       this.sharedTermsEnum = sharedTermsEnum;
+      this.releasedShared = sharedTermsEnum == null ? null : new FixedBitSet(sharedTermsEnum.length);
     }
 
     @Override
@@ -138,8 +133,9 @@ public class SpanTermQuery extends SpanQuery {
         return null;
       }
       final TermsEnum termsEnum;
-      if (sharedTermsEnum != null) {
-        termsEnum = sharedTermsEnum[context.ord];
+      final int ord = context.ord;
+      if (sharedTermsEnum != null && releasedShared.getAndSet(ord)) {
+        termsEnum = sharedTermsEnum[ord];
         if (termsEnum == null) {
           return null;
         }

@@ -420,6 +420,10 @@ public final class SpanOrQuery extends SpanQuery {
           if (positionLengthCeiling >= MIN_POSITION_LENGTH_CEILING_WITH_POSSIBLE_ENDPOSITION_DECREASE) {
             positionLengthCeiling = ~positionLengthCeiling;
           }
+          if (lookaheadNextStartPositionFloor == UNINITIALIZED_AT_DOC) {
+            // no subspans have lookahead available at this doc
+            lookaheadNextStartPositionFloor = UNKNOWN_AT_DOC;
+          }
           assert byPositionQueue.size() > 0;
         }
 

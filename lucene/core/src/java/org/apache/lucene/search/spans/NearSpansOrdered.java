@@ -323,13 +323,16 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
       if (hard) {
         stored.init(nextDocId);
         replayBacking = null;
+        minStart = -1;
+        maxEnd = -1;
+      } else {
+        minStart = backing.startPosition();
+        maxEnd = backing.endPosition();
       }
       if (checkMatchLimit) {
         matchLimit = Integer.MAX_VALUE;
       }
       replayStored = null;
-      minStart = backing.startPosition();
-      maxEnd = backing.endPosition();
       minEnd = Math.min(maxEnd, minStart + 2);
       active = backing;
       backingRegistered = RegistrationStatus.NONE;
@@ -729,6 +732,90 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
       return backing.cost();
     }
     
+  }
+
+  private static class OuterTPIWrapper extends TwoPhaseIterator {
+
+    private final TwoPhaseIterator backing;
+
+    public OuterTPIWrapper(TwoPhaseIterator backing, PositionDeque toRelease) {
+      super(new OuterApproximationWrapper(backing.approximation(), toRelease));
+      this.backing = backing;
+    }
+
+    @Override
+    public boolean matches() throws IOException {
+      return backing.matches();
+    }
+
+    @Override
+    public float matchCost() {
+      return backing.matchCost();
+    }
+
+  }
+
+  private static class OuterApproximationWrapper extends DocIdSetIterator {
+
+    private final DocIdSetIterator backing;
+    private final PositionDeque toRelease;
+
+    public OuterApproximationWrapper(DocIdSetIterator backing, PositionDeque toRelease) {
+      this.backing = backing;
+      this.toRelease = toRelease;
+    }
+
+    @Override
+    public int docID() {
+      return backing.docID();
+    }
+
+    @Override
+    public int nextDoc() throws IOException {
+      int ret = backing.nextDoc();
+      if (ret == Spans.NO_MORE_DOCS) {
+        toRelease.release();
+      }
+      return ret;
+    }
+
+    @Override
+    public int advance(int target) throws IOException {
+      int ret = backing.advance(target);
+      if (ret == Spans.NO_MORE_DOCS) {
+        toRelease.release();
+      }
+      return ret;
+    }
+
+    @Override
+    public long cost() {
+      return backing.cost();
+    }
+
+  }
+
+  @Override
+  public TwoPhaseIterator asTwoPhaseIterator() {
+    return new OuterTPIWrapper(super.asTwoPhaseIterator(), resettableSpans[0].stored);
+  }
+
+  @Override
+  public int advance(int target) throws IOException {
+    int ret = super.advance(target);
+    if (ret == Spans.NO_MORE_DOCS) {
+      resettableSpans[0].stored.release();
+    }
+    return ret;
+  }
+
+  @Override
+  public int nextDoc() throws IOException {
+    int ret = super.nextDoc();
+    if (ret == Spans.NO_MORE_DOCS) {
+      resettableSpans[0].stored.release();
+    }
+    return ret;
   }
 
   private static RecordingPushbackSpans[] wrapSpans(List<Spans> subSpans, int allowedSlop, List<List<RecordingPushbackSpans>> repeatGroups, List<RecordingPushbackSpans> noRepeat,

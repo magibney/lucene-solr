@@ -32,6 +32,7 @@ import org.apache.lucene.analysis.TokenFilter;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.Tokenizer;
 import org.apache.lucene.analysis.core.FlattenGraphFilterFactory;
+import org.apache.lucene.analysis.core.PositionLengthOrderTokenFilter;
 import org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
@@ -45,10 +46,10 @@ import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.ScoreMode;
 import static org.apache.lucene.search.spans.TestSpanCollection.ENCODE_LOOKAHEAD;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.LuceneTestCase;
-import org.apache.solr.analysis.ReversedWildcardFilterFactory;
 import static org.junit.Assert.assertEquals;
 import org.junit.Test;
 
@@ -126,7 +127,7 @@ public class TestTermSpans extends LuceneTestCase {
   public void testSomethingHit() throws IOException {
     SpanTermQuery q = new SpanTermQuery(new Term(FIELD, "a"));
     TermCollector collector = new TermCollector();
-    Spans spans = q.createWeight(searcher, false, 1f).getSpans(searcher.getIndexReader().leaves().get(0), SpanWeight.Postings.PAYLOADS);
+    Spans spans = q.createWeight(searcher, ScoreMode.COMPLETE_NO_SCORES, 1f).getSpans(searcher.getIndexReader().leaves().get(0), SpanWeight.Postings.PAYLOADS);
     assertEquals(0, spans.advance(0));
     for (int i = 0; i < 3; i++) {
       int expectEnd = i + 1;
@@ -157,7 +158,7 @@ public class TestTermSpans extends LuceneTestCase {
       switch (fieldName) {
         case FIELD:
           filter = new ExpandingTokenFilter(components.getTokenStream());
-          filter = new PositionLengthOrderTokenFilterFactory.PositionLengthOrderTokenFilter(filter, ENCODE_LOOKAHEAD);
+          filter = new PositionLengthOrderTokenFilter(filter, ENCODE_LOOKAHEAD);
           return new TokenStreamComponents(components.getTokenizer(), filter);
         case FIELD2:
           filter = new WordDelimiterGraphFilter(components.getTokenStream(),
@@ -166,8 +167,7 @@ public class TestTermSpans extends LuceneTestCase {
               | WordDelimiterGraphFilter.CATENATE_WORDS,
               CharArraySet.EMPTY_SET);
           filter = new FlattenGraphFilterFactory(Collections.EMPTY_MAP).create(filter);
-          filter = new ReversedWildcardFilterFactory(Collections.EMPTY_MAP).create(filter);
-          filter = new PositionLengthOrderTokenFilterFactory.PositionLengthOrderTokenFilter(filter, ENCODE_LOOKAHEAD);
+          filter = new PositionLengthOrderTokenFilter(filter, ENCODE_LOOKAHEAD);
           return new TokenStreamComponents(components.getTokenizer(), filter);
         default:
           throw new AssertionError();
@@ -227,7 +227,7 @@ public class TestTermSpans extends LuceneTestCase {
     SpanTermQuery qd = new SpanTermQuery(new Term(FIELD2, "hits"));
     SpanNearQuery q = new SpanNearQuery(new SpanQuery[]{qa, qb, qc, qd}, 0, true);
     TermCollector collector = new TermCollector();
-    spans = q.createWeight(searcher, false, 1f).getSpans(searcher.getIndexReader().leaves().get(0), SpanWeight.Postings.PAYLOADS);
+    spans = q.createWeight(searcher, ScoreMode.COMPLETE_NO_SCORES, 1f).getSpans(searcher.getIndexReader().leaves().get(0), SpanWeight.Postings.PAYLOADS);
     assertEquals(2, spans.advance(2));
     assertEquals(0, spans.nextStartPosition());
     assertEquals(5, spans.endPosition());
@@ -243,7 +243,7 @@ public class TestTermSpans extends LuceneTestCase {
         WordDelimiterGraphFilter.PRESERVE_ORIGINAL | 
         WordDelimiterGraphFilter.CATENATE_WORDS, 
         CharArraySet.EMPTY_SET);
-    tf = new PositionLengthOrderTokenFilterFactory.PositionLengthOrderTokenFilter(tf, ENCODE_LOOKAHEAD);
+    tf = new PositionLengthOrderTokenFilter(tf, ENCODE_LOOKAHEAD);
     CharTermAttribute charTermAtt = tf.addAttribute(CharTermAttribute.class);
     PositionIncrementAttribute posIncrAtt = tf.addAttribute(PositionIncrementAttribute.class);
     PositionLengthAttribute posLenAtt = tf.addAttribute(PositionLengthAttribute.class);
