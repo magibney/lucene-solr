@@ -121,7 +121,7 @@ public class TestPayloadCheckQuery extends LuceneTestCase {
     clauses[0] = term1;
     clauses[1] = term2;
     clauses[2] = new SpanTermQuery(new Term("field", "five"));
-    snq = new SpanNearQuery(clauses, 0, true);
+    snq = new SpanNearQuery(clauses, 0, true, SpanNearQuery.DEFAULT_COMBO_MODE, SpanNearQuery.DEFAULT_COMBO_THRESHOLD, SpanNearQuery.DEFAULT_ALLOW_OVERLAP, false);
     pay = new BytesRef("pos: " + 0);
     pay2 = new BytesRef("pos: " + 1);
     BytesRef pay3 = new BytesRef("pos: " + 2);

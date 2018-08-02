@@ -320,12 +320,18 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
     return buffer.toString();
   }
 
-  private TermsEnum[] getSharedTermEnums(IndexSearcher searcher) throws IOException {
+  private TermsEnum[] getSharedTermEnums(IndexSearcher searcher, SpanTermQuery stq) throws IOException {
     List<LeafReaderContext> leaves = searcher.getTopReaderContext().leaves();
     TermsEnum[] teShare = new TermsEnum[leaves.size()];
     for (LeafReaderContext lrc : leaves) {
       Terms terms = lrc.reader().terms(field);
-      teShare[lrc.ord] = terms == null ? null : terms.iterator();
+      if (terms == null) {
+        teShare[lrc.ord] = null;
+      } else if (!terms.hasPositions()) {
+        throw new IllegalStateException("field \"" + field + "\" was indexed without position data; cannot run SpanTermQuery (term=" + stq.getTerm().text() + ")");
+      } else {
+        teShare[lrc.ord] = terms.iterator();
+      }
     }
     return teShare;
   }
@@ -336,9 +342,10 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
   public SpanWeight createWeight(IndexSearcher searcher, ScoreMode scoreMode, float boost) throws IOException {
     List<SpanWeight> subWeights = new ArrayList<>();
     for (SpanQuery q : clauses) {
-      if (q instanceof SpanTermQuery) {
+      if (false && q instanceof SpanTermQuery) {
+        final SpanTermQuery stq = (SpanTermQuery) q;
         if (sharedTermEnums == null) {
-          sharedTermEnums = getSharedTermEnums(searcher);
+          sharedTermEnums = getSharedTermEnums(searcher, stq);
         }
         subWeights.add(((SpanTermQuery)q).createWeight(searcher, scoreMode, boost, sharedTermEnums));
       } else {
@@ -348,17 +355,30 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
     return new SpanNearWeight(subWeights, searcher, scoreMode.needsScores() ? getTermStates(subWeights) : null, boost);
   }
 
+  private static final int SUPPORT_PARALLEL_REUSE_LIMIT = 2; // e.g. for bulkScorer and scorer
+  private static class ReuseStruct {
+    private final ArrayList<TermSpansRepeatBuffer> reuseTSRB;
+    private final ArrayList<PositionDeque> reuseDeque;
+
+    public ReuseStruct(ArrayList<TermSpansRepeatBuffer> reuseTSRB, ArrayList<PositionDeque> reuseDeque) {
+      this.reuseTSRB = reuseTSRB;
+      this.reuseDeque = reuseDeque;
+    }
+  }
+
   public class SpanNearWeight extends SpanWeight {
 
     final List<SpanWeight> subWeights;
-    private List<TermSpansRepeatBuffer> reuse;
-    private List<PositionDeque> reuseDeque;
+    private int maxSpanCountPerOrd = 0;
+    private final int[] ordSpanCounts;
+    private LinkedList<ReuseStruct> reuseQueue = new LinkedList<>();
     private final ComboMode weightComboMode;
 
     public SpanNearWeight(List<SpanWeight> subWeights, IndexSearcher searcher, Map<Term, TermStates> terms, float boost) throws IOException {
       super(SpanNearQuery.this, searcher, terms, boost);
       this.weightComboMode = /*terms == null ? ComboMode.GREEDY_END_POSITION :*/ comboMode;
       this.subWeights = subWeights;
+      this.ordSpanCounts = new int[searcher.getIndexReader().leaves().size()];
     }
 
     @Override
@@ -386,28 +406,44 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
         }
       }
 
-      final Iterator<TermSpansRepeatBuffer> reuseIter;
-      if (reuse != null) {
-        reuseIter = reuse.iterator();
-        reuse = new ArrayList<>(reuse.size());
-      } else {
-        reuseIter = null;
-        reuse = new ArrayList<>(subSpans.size());
-      }
-
-      final Iterator<PositionDeque> reuseDequeIter;
-      if (reuseDeque != null) {
-        reuseDequeIter = reuseDeque.iterator();
-        reuseDeque = new ArrayList<>(reuseDeque.size());
-      } else {
-        reuseDequeIter = null;
-        reuseDeque = new ArrayList<>(subSpans.size());
-      }
-      
       // all NearSpans require at least two subSpans
       if (!inOrder) {
         return new NearSpansUnordered(slop, subSpans);
       } else {
+        maxSpanCountPerOrd = Math.max(maxSpanCountPerOrd, ++ordSpanCounts[context.ord]);
+        final ArrayList<TermSpansRepeatBuffer> reuse;
+        final ArrayList<PositionDeque> reuseDeque;
+        final Iterator<TermSpansRepeatBuffer> reuseIter;
+        final Iterator<PositionDeque> reuseDequeIter;
+        assignReuse:
+        {
+          if (!reuseQueue.isEmpty()) {
+            Iterator<ReuseStruct> iter = reuseQueue.iterator();
+            do {
+              ReuseStruct next = iter.next();
+              final int size;
+              final ArrayList<PositionDeque> toReuse = next.reuseDeque;
+              if (!toReuse.get(toReuse.size() - 1).isActive()) { // check at phraseIndex=0
+                iter.remove();
+                final List<TermSpansRepeatBuffer> tsrb = next.reuseTSRB;
+                reuseIter = tsrb.iterator();
+                reuse = new ArrayList<>(tsrb.size());
+                reuseDequeIter = toReuse.iterator();
+                reuseDeque = new ArrayList<>(toReuse.size());
+                break assignReuse;
+              } else if ((size = reuseQueue.size()) > SUPPORT_PARALLEL_REUSE_LIMIT || size > maxSpanCountPerOrd) {
+                // if spans are not consumed, prevent reuse queue from growing out of control
+                iter.remove();
+              }
+            } while (iter.hasNext());
+          }
+          reuseIter = null;
+          reuse = new ArrayList<>(subSpans.size());
+          reuseDequeIter = null;
+          reuseDeque = new ArrayList<>(subSpans.size());
+        }
+        reuseQueue.add(new ReuseStruct(reuse, reuseDeque));
+
         final Terms shingleTerms;
         final List<Spans> shinglesSpans;
         getShinglesSpans:
