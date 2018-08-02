@@ -233,6 +233,7 @@ public class TestNearSpansOrdered extends LuceneTestCase {
     }, 1, true);
     Spans spans = q.createWeight(searcher, ScoreMode.COMPLETE_NO_SCORES, 1f).getSpans(searcher.getIndexReader().leaves().get(0), SpanWeight.Postings.POSITIONS);
     assertNext(spans,4,0,2);
+    assertNext(spans,4,0,3);
     assertFinished(spans);
   }
 
