@@ -1592,7 +1592,7 @@ public class TestSpanCollection extends LuceneTestCase {
         System.err.println("QUERY: "+q);
         TopDocs topDocs = searcher.search(q, 10);
         try {
-          assertEquals(1, topDocs.totalHits);
+          assertEquals(1, topDocs.totalHits.value);
         } catch (AssertionError er) {
           throw er;
         }
@@ -1639,12 +1639,12 @@ public class TestSpanCollection extends LuceneTestCase {
             SpanNearQuery.DEFAULT_COMBO_MODE, SpanNearQuery.DEFAULT_COMBO_THRESHOLD, SpanNearQuery.DEFAULT_ALLOW_OVERLAP,
             SpanNearQuery.DEFAULT_COMBINE_REPEAT_SPANS, true, null, null);
         TopDocs topDocs = searcher.search(q, 10);
-        assertEquals(1, topDocs.totalHits);
+        assertEquals(1, topDocs.totalHits.value);
         q = new SpanNearQuery(new SpanQuery[]{q1, q2, q3}, 1, true,
             SpanNearQuery.DEFAULT_COMBO_MODE, SpanNearQuery.DEFAULT_COMBO_THRESHOLD, SpanNearQuery.DEFAULT_ALLOW_OVERLAP,
             SpanNearQuery.DEFAULT_COMBINE_REPEAT_SPANS, false, null, null);
         topDocs = searcher.search(q, 10);
-        assertEquals(1, topDocs.totalHits);
+        assertEquals(1, topDocs.totalHits.value);
       }
     }
   }

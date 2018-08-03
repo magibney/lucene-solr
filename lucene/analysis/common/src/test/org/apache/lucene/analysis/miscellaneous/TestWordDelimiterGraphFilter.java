@@ -400,7 +400,7 @@ public class TestWordDelimiterGraphFilter extends BaseTokenStreamTestCase {
         Query q = new QueryBuilder(searchAnalyzer).createPhraseQuery(field, input);
         TopDocs topDocs = searcher.search(q, 10);
         try {
-          assertEquals(1, topDocs.totalHits);
+          assertEquals(1, topDocs.totalHits.value);
         } catch (AssertionError er) {
           throw er;
         }

@@ -55,7 +55,7 @@ public class NestedSpanNearTest {
 		IndexReader reader = DirectoryReader.open(directory);
 		IndexSearcher searcher = new IndexSearcher(reader);
 		TopDocs topDocs = searcher.search(query, 10);
-		assertEquals(1, topDocs.totalHits);
+		assertEquals(1, topDocs.totalHits.value);
 	}
 
 	private SpanQuery createNestedSpanQuery(String queryStr) throws IOException {
