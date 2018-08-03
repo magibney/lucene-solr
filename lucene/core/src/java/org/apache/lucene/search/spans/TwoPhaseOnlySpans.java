@@ -22,7 +22,6 @@ import org.apache.lucene.search.TwoPhaseIterator;
 
 /**
  *
- * @author magibney
  */
 public class TwoPhaseOnlySpans extends Spans {
 

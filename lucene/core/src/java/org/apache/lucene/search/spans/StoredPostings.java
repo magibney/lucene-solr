@@ -24,7 +24,6 @@ import org.apache.lucene.util.BytesRef;
 
 /**
  *
- * @author magibney
  */
 class StoredPostings extends PostingsEnum {
   private int freq;

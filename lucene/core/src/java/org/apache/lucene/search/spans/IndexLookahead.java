@@ -20,7 +20,6 @@ import java.io.IOException;
 
 /**
  *
- * @author magibney
  */
 interface IndexLookahead {
 

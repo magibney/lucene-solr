@@ -25,7 +25,6 @@ import org.apache.lucene.util.BytesRef;
 
 /**
  *
- * @author magibney
  */
 public class TermSpansRepeatBuffer {
 

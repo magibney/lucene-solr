@@ -18,7 +18,6 @@ package org.apache.lucene.analysis.core;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
 import org.apache.lucene.analysis.TokenFilter;
 import org.apache.lucene.analysis.TokenStream;
@@ -27,11 +26,11 @@ import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
 import org.apache.lucene.analysis.tokenattributes.PositionLengthAttribute;
 import org.apache.lucene.search.spans.TermSpans;
 import org.apache.lucene.store.ByteArrayDataOutput;
+import org.apache.lucene.util.ArrayUtil;
 import org.apache.lucene.util.BytesRef;
 
 /**
  *
- * @author magibney
  */
 public class PositionLengthOrderTokenFilter extends TokenFilter {
   private static final int MAX_VINT_BYTES = Integer.SIZE + 1;
@@ -49,7 +48,7 @@ public class PositionLengthOrderTokenFilter extends TokenFilter {
 
   public PositionLengthOrderTokenFilter(TokenStream input, boolean indexLookahead) {
     super(input);
-    this.magicNumber = Arrays.copyOf(TermSpans.MAGIC_NUMBER, TermSpans.MAGIC_NUMBER.length);
+    this.magicNumber = ArrayUtil.copyOfSubArray(TermSpans.MAGIC_NUMBER, 0, TermSpans.MAGIC_NUMBER.length);
     if (indexLookahead) {
       this.magicNumber[TermSpans.MAGIC_STABLE_LENGTH] = TermSpans.ENCODE_LOOKAHEAD;
     }
@@ -71,11 +70,11 @@ public class PositionLengthOrderTokenFilter extends TokenFilter {
   private BytesRef encodePositionLength(int length) {
     final byte[] bytes;
     if (length == 1) {
-      bytes = Arrays.copyOf(magicNumber, 3);
+      bytes = ArrayUtil.growExact(magicNumber, 3);
       bytes[2] = 1;
       return new BytesRef(bytes);
     } else {
-      bytes = Arrays.copyOf(magicNumber, magicNumber.length + MAX_VINT_BYTES);
+      bytes = ArrayUtil.growExact(magicNumber, magicNumber.length + MAX_VINT_BYTES);
     }
     positionLengthWriter.reset(bytes, magicNumber.length, MAX_VINT_BYTES);
     try {

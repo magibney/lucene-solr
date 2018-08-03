@@ -22,7 +22,6 @@ import org.apache.lucene.analysis.util.TokenFilterFactory;
 
 /**
  *
- * @author magibney
  */
 public class PositionLengthOrderTokenFilterFactory extends TokenFilterFactory {
   

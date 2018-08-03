@@ -49,7 +49,6 @@ import org.apache.solr.update.AddUpdateCommand;
 
 /**
  *
- * @author magibney
  */
 public class ShingleFilterUpdateRequestProcessorFactory extends UpdateRequestProcessorFactory {
 

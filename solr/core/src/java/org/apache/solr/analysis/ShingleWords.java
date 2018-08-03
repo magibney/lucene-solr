@@ -21,6 +21,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.AbstractMap.SimpleImmutableEntry;
 import java.util.AbstractSet;
 import java.util.ArrayList;
@@ -43,7 +44,6 @@ import org.apache.solr.update.AddUpdateCommand;
 
 /**
  *
- * @author magibney
  */
 public class ShingleWords {
 
@@ -249,7 +249,7 @@ public class ShingleWords {
       Map<String, Entry<Words<String>, Words<BytesRef>>> shingleWordsPerField) {
     BufferedReader br = null;
     try {
-      br = new BufferedReader(new InputStreamReader(f));
+      br = new BufferedReader(new InputStreamReader(f, StandardCharsets.UTF_8));
       Set<String> s = new HashSet<>();
       Set<BytesRef> b = new HashSet<>();
       String line;

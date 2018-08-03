@@ -38,7 +38,6 @@ import org.apache.lucene.search.spans.SpanNearQuery.ComboMode;
 
 /**
  *
- * @author magibney
  */
 public class PositionDeque implements Iterable<Spans> {
 
@@ -419,7 +418,7 @@ public class PositionDeque implements Iterable<Spans> {
 
   /**
    * 
-   * @param hardMinStart
+   * @param hardMinStart remove all nodes with start &lt; this param
    * @return true if deque is cleared as a result of this operation, otherwise false
    */
   private boolean truncate(int hardMinStart) {
@@ -1270,17 +1269,17 @@ public class PositionDeque implements Iterable<Spans> {
     if (((drn = drn.next) != anchor)) {
       do {
         Spans s = drn.node;
-        System.err.println(prefix+"got endSpanPosition: " + s.startPosition() + "=>" + s.endPosition());
+        //System.out.println(prefix+"got endSpanPosition: " + s.startPosition() + "=>" + s.endPosition());
         PositionDeque.printSpans(prefix, s, -1);
       } while ((drn = drn.next) != anchor);
     } else {
-      System.err.println(prefix+"got no endSpanPositions");
+      //System.out.println(prefix+"got no endSpanPositions");
     }
   }
   
   public static void printSpans(String prefix, Spans s, int dnLink) {
     Node n = (Node) s;
-    System.err.println(prefix + n.startPosition()+"=>"+n.endPosition()+" ("+n.maxSlopRemainingToStart+"<-/->"+n.maxSlopRemainingToEnd+") -- "+dnLink);
+    //System.out.println(prefix + n.startPosition()+"=>"+n.endPosition()+" ("+n.maxSlopRemainingToStart+"<-/->"+n.maxSlopRemainingToEnd+") -- "+dnLink);
     if (n.phrasePrev != null) {
       DLLNode dn = n.phrasePrev;
       do {
@@ -2967,24 +2966,24 @@ public class PositionDeque implements Iterable<Spans> {
         p.add(null, i, j, 0);
       }
       for (int k = 0; k <= i + 1; k++) {
-        System.err.println("iter from "+k);
+        //System.out.println("iter from "+k);
         Iterator<Spans> iter = p.iteratorMinStart(-1, k);
         while (iter.hasNext()) {
           Spans next = iter.next();
-          System.err.println("\t"+next.startPosition()+"=>"+next.endPosition());
+          //System.out.println("\t"+next.startPosition()+"=>"+next.endPosition());
         }
       }
       Iterator<Spans> iter = p.descendingIterator();
       while (iter.hasNext()) {
         Spans next = iter.next();
-        System.err.println("descend! " + next.startPosition() + "=>" + next.endPosition());
+        //System.out.println("descend! " + next.startPosition() + "=>" + next.endPosition());
       }
       boolean drop = true;
       iter = p.iterator();
       while (iter.hasNext()) {
         Spans next = iter.next();
         if (drop) {
-          System.err.println("remove "+next.startPosition()+"=>"+next.endPosition());
+          //System.out.println("remove "+next.startPosition()+"=>"+next.endPosition());
           iter.remove();
           drop = false;
         } else {

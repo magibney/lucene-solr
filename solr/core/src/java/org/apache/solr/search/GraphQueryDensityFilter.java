@@ -46,7 +46,6 @@ import org.apache.solr.search.ExtendedDismaxQParser.GraphQueryFilter;
 
 /**
  *
- * @author magibney
  */
 public class GraphQueryDensityFilter implements GraphQueryFilter {
 

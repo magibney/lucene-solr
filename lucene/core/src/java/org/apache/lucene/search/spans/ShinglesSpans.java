@@ -25,7 +25,6 @@ import org.apache.lucene.search.DocIdSetIterator;
 
 /**
  *
- * @author magibney
  */
 public class ShinglesSpans {
 
