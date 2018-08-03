@@ -322,7 +322,12 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
 
   private TermsEnum[] getSharedTermEnums(IndexSearcher searcher, SpanTermQuery stq) throws IOException {
     List<LeafReaderContext> leaves = searcher.getTopReaderContext().leaves();
-    TermsEnum[] teShare = new TermsEnum[leaves.size()];
+    int size = leaves.size();
+    if (size == 0) {
+      // see UnifiedHighlighter.EMPTY_INDEXSEARCHER
+      return null;
+    }
+    TermsEnum[] teShare = new TermsEnum[size];
     for (LeafReaderContext lrc : leaves) {
       Terms terms = lrc.reader().terms(field);
       if (terms == null) {
@@ -342,7 +347,7 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
   public SpanWeight createWeight(IndexSearcher searcher, ScoreMode scoreMode, float boost) throws IOException {
     List<SpanWeight> subWeights = new ArrayList<>();
     for (SpanQuery q : clauses) {
-      if (false && q instanceof SpanTermQuery) {
+      if (q instanceof SpanTermQuery) {
         final SpanTermQuery stq = (SpanTermQuery) q;
         if (sharedTermEnums == null) {
           sharedTermEnums = getSharedTermEnums(searcher, stq);
