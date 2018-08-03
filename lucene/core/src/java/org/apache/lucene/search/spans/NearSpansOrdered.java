@@ -204,6 +204,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
         Map<BytesRef, RepeatGroupEntry> repeatGroupsLookup, List<List<RecordingPushbackSpans>> repeatGroups, List<RecordingPushbackSpans> noRepeat, int size, boolean combineRepeatGroups,
         Iterator<TermSpansRepeatBuffer> reuseInput, List<TermSpansRepeatBuffer> reuseOutput, boolean offsets, boolean supportVariableTermSpansLength, ComboMode comboMode,
         Iterator<PositionDeque> reuseDequeInput, List<PositionDeque> reuseDequeOutput) {
+      final boolean preservePayloads = true;
       this.index = index;
       this.allowedSlop = allowedSlop;
       this.previousVariablePositionLength = previousVariablePositionLength;
@@ -263,7 +264,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
                 this.backing = tmpBacking;
                 this.lookaheadBacking = (IndexLookahead)tmpBacking; // we know it's a TermSpans
               } else {
-                TermSpansRepeatBuffer tsrb = new TermSpansRepeatBuffer(ts, repeatCount, offsets, reuseInput == null ? null : reuseInput.next(), allowedSlop + size);
+                TermSpansRepeatBuffer tsrb = new TermSpansRepeatBuffer(ts, repeatCount, offsets, preservePayloads, reuseInput == null ? null : reuseInput.next(), allowedSlop + size);
                 reuseOutput.add(tsrb);
                 iter = tsrb.getRepeatTermSpans();
                 instanceEntry.wrappedTermSpansIter = iter;
@@ -299,7 +300,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
           this.backing = tmpBacking;
           this.lookaheadBacking = (tmpBacking instanceof IndexLookahead) ? (IndexLookahead)tmpBacking : null;
         } else {
-          TermSpansRepeatBuffer tsrb = new TermSpansRepeatBuffer(ts, repeatCount, offsets, reuseInput == null ? null : reuseInput.next(), allowedSlop + size);
+          TermSpansRepeatBuffer tsrb = new TermSpansRepeatBuffer(ts, repeatCount, offsets, preservePayloads, reuseInput == null ? null : reuseInput.next(), allowedSlop + size);
           reuseOutput.add(tsrb);
           final ListIterator<RepeatTermSpans> iter = tsrb.getRepeatTermSpans();
           instanceEntry.wrappedTermSpansIter = iter;

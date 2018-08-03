@@ -50,9 +50,11 @@ public class TermSpansRepeatBuffer {
   private int capacity;
   private int indexMask;
 
+  private final boolean payloads;
   private final boolean offsets;
   private int[] startPositionBuffer;
   private int[] positionLengthBuffer;
+  private BytesRef[] payloadBuffer;
   private int[] startOffsetBuffer;
   private int[] endOffsetBuffer;
   private final int[][] buffers;
@@ -65,25 +67,27 @@ public class TermSpansRepeatBuffer {
     return Arrays.asList(repeatGroup).listIterator(repeatGroup.length);
   }
 
-  public TermSpansRepeatBuffer(TermSpans backing, int count, boolean offsets, TermSpansRepeatBuffer reuse) {
-    this(backing, count, offsets, reuse, -1);
+  public TermSpansRepeatBuffer(TermSpans backing, int count, boolean offsets, boolean payloads, TermSpansRepeatBuffer reuse) {
+    this(backing, count, offsets, payloads, reuse, -1);
   }
 
-  public TermSpansRepeatBuffer(TermSpans backing, int count, boolean offsets, int capacity) {
-    this(backing, count, offsets, null, capacity);
+  public TermSpansRepeatBuffer(TermSpans backing, int count, boolean offsets, boolean payloads, int capacity) {
+    this(backing, count, offsets, payloads, null, capacity);
   }
 
-  public TermSpansRepeatBuffer(TermSpans backing, int count, boolean offsets) {
-    this(backing, count, offsets, null, DEFAULT_CAPACITY);
+  public TermSpansRepeatBuffer(TermSpans backing, int count, boolean offsets, boolean payloads) {
+    this(backing, count, offsets, payloads, null, DEFAULT_CAPACITY);
   }
 
-  public TermSpansRepeatBuffer(TermSpans backing, int count, boolean offsets, TermSpansRepeatBuffer reuse, int capacityHint) {
+  public TermSpansRepeatBuffer(TermSpans backing, int count, boolean offsets, boolean payloads, TermSpansRepeatBuffer reuse, int capacityHint) {
     this.offsets = offsets;
+    this.payloads = payloads;
     if (reuse != null) {
       this.capacity = reuse.capacity;
       indexMask = this.capacity - 1;
       this.startPositionBuffer = reuse.startPositionBuffer;
       this.positionLengthBuffer = reuse.positionLengthBuffer;
+      this.payloadBuffer = reuse.payloadBuffer;
       this.startOffsetBuffer = reuse.startOffsetBuffer;
       this.endOffsetBuffer = reuse.endOffsetBuffer;
       this.buffers = reuse.buffers;
@@ -101,13 +105,14 @@ public class TermSpansRepeatBuffer {
         endOffsetBuffer = null;
         buffers = new int[][]{startPositionBuffer, positionLengthBuffer};
       }
+      payloadBuffer = payloads ? new BytesRef[capacity] : null;
     }
     this.backing = backing;
     this.backingPostings = backing.postings;
     this.repeatCount = count - 1;
     this.repeatGroup = new RepeatTermSpans[count];
     for (int i = 0; i < count; i++) {
-      repeatGroup[i] = new RepeatTermSpans(this, i, offsets);
+      repeatGroup[i] = new RepeatTermSpans(this, i, offsets, payloads);
     }
   }
   
@@ -130,6 +135,10 @@ public class TermSpansRepeatBuffer {
     }
   }
   
+  private boolean assign(Object o1, Object o2) {
+    return true;
+  }
+
   private void increaseCapacity() {
     int srcHead = head & indexMask;
     int srcTail = tail & indexMask;
@@ -137,24 +146,30 @@ public class TermSpansRepeatBuffer {
     capacity <<= 1; // double capacity
     indexMask = capacity - 1; // reset index mask
     int dstTail = tail & indexMask;
+    int i;
+    Object oldBuffer;
+    Object newBuffer;
+    if (payloads) {
+      i = buffers.length;
+      oldBuffer = payloadBuffer;
+      newBuffer = new BytesRef[capacity];
+    } else {
+      i = buffers.length - 1;
+      oldBuffer = buffers[i];
+      newBuffer = buffers[i] = new int[capacity];
+    }
     if (srcHead > srcTail) {
       int length = srcHead - srcTail;
-      for (int i = buffers.length - 1; i >= 0; i--) {
-        int[] oldBuffer = buffers[i];
-        int[] newBuffer = new int[capacity];
-        buffers[i] = newBuffer;
+      do {
         System.arraycopy(oldBuffer, srcTail, newBuffer, dstTail, length);
-      }
+      } while (--i >= 0 && assign(oldBuffer = buffers[i], newBuffer = buffers[i] = new int[capacity]));
     } else {
       int tailChunkLength = srcCapacity - srcTail;
       int dstHeadChunkStart = (dstTail + tailChunkLength) & indexMask;
-      for (int i = buffers.length - 1; i >= 0; i--) {
-        int[] oldBuffer = buffers[i];
-        int[] newBuffer = new int[capacity];
-        buffers[i] = newBuffer;
+      do {
         System.arraycopy(oldBuffer, srcTail, newBuffer, dstTail, tailChunkLength);
         System.arraycopy(oldBuffer, 0, newBuffer, dstHeadChunkStart, srcHead);
-      }
+      } while (--i >= 0 && assign(oldBuffer = buffers[i], newBuffer = buffers[i] = new int[capacity]));
     }
     startPositionBuffer = buffers[0];
     positionLengthBuffer = buffers[1];
@@ -180,6 +195,10 @@ public class TermSpansRepeatBuffer {
       if (offsets) {
         startOffsetBuffer[srcStartIndex] = backingPostings.startOffset();
         endOffsetBuffer[srcStartIndex] = backingPostings.endOffset();
+      }
+      if (payloads) {
+        BytesRef payload = backingPostings.getPayload();
+        payloadBuffer[srcStartIndex] = payload == null ? null : BytesRef.deepCopyOf(payload);
       }
       nonNegativeHead = ++head & Integer.MAX_VALUE;
     }
@@ -231,8 +250,10 @@ public class TermSpansRepeatBuffer {
     private final TermSpansRepeatBuffer backing;
     final TermSpans backingSpans;
     private final boolean offsets;
+    private final boolean payloads;
     private final PostingsEnum postings;
     private final RepeatPostingsEnum offsetPostings;
+    private final ResettablePostings resettablePostings;
     private final Term term;
     private final int repeatIndex;
     private int bufferIndex = -1;
@@ -242,16 +263,25 @@ public class TermSpansRepeatBuffer {
 
     private int matchLimit = Integer.MAX_VALUE;
 
-    private RepeatTermSpans(TermSpansRepeatBuffer backing, int index, boolean offsets) {
+    private RepeatTermSpans(TermSpansRepeatBuffer backing, int index, boolean offsets, boolean payloads) {
       this.backing = backing;
       this.backingSpans = backing.backing;
       this.term = backingSpans.term;
       this.offsets = offsets;
+      this.payloads = payloads;
       if (offsets) {
-        this.postings = this.offsetPostings = new RepeatPostingsEnum(this);
+        this.postings = this.offsetPostings = payloads ? new PayloadRepeatPostingsEnum(this) : new RepeatPostingsEnum(this);
+        this.resettablePostings = this.offsetPostings;
       } else {
         this.offsetPostings = null;
-        this.postings = new NoOffsetsRepeatPostingsEnum(this);
+        if (payloads) {
+          PayloadNoOffsetsRepeatPostingsEnum payloadNoOffsetsPostings = new PayloadNoOffsetsRepeatPostingsEnum(this);
+          this.resettablePostings = payloadNoOffsetsPostings;
+          this.postings = payloadNoOffsetsPostings;
+        } else {
+          this.resettablePostings = null;
+          this.postings = new NoOffsetsRepeatPostingsEnum(this);
+        }
       }
       this.repeatIndex = index;
     }
@@ -264,8 +294,8 @@ public class TermSpansRepeatBuffer {
       matchLimit = Integer.MAX_VALUE;
       startPosition = -1;
       endPosition = -1;
-      if (offsets) {
-        offsetPostings.reset();
+      if (offsets || payloads) {
+        resettablePostings.reset();
       }
       this.bufferIndex = -1;
     }
@@ -408,7 +438,7 @@ public class TermSpansRepeatBuffer {
     
   }
   
-  private static final class NoOffsetsRepeatPostingsEnum extends PostingsEnum {
+  private static class NoOffsetsRepeatPostingsEnum extends PostingsEnum {
     
     private final TermSpans backingSpans;
 
@@ -463,12 +493,65 @@ public class TermSpansRepeatBuffer {
     
   }
   
-  private static final class RepeatPostingsEnum extends PostingsEnum {
+  private static final class PayloadNoOffsetsRepeatPostingsEnum extends NoOffsetsRepeatPostingsEnum implements ResettablePostings {
 
     private final RepeatTermSpans backing;
     private final TermSpansRepeatBuffer backingBuf;
-    private final TermSpans backingSpans;
     private final PostingsEnum backingPostings;
+    private BytesRef payload;
+
+    public PayloadNoOffsetsRepeatPostingsEnum(RepeatTermSpans backing) {
+      super(backing);
+      this.backing = backing;
+      this.backingBuf = backing.backing;
+      this.backingPostings = backing.backingSpans.postings;
+    }
+
+    @Override
+    public BytesRef getPayload() throws IOException {
+      return backing.bufferIndex < 0 ? backingPostings.getPayload()
+          : (payload != null ? payload : (payload = backingBuf.payloadBuffer[backing.bufferIndex & backingBuf.indexMask]));
+    }
+
+    @Override
+    public void reset() {
+      payload = null;
+    }
+
+  }
+
+  private static interface ResettablePostings {
+    void reset();
+  }
+
+  private static final class PayloadRepeatPostingsEnum extends RepeatPostingsEnum {
+
+    private BytesRef payload;
+
+    public PayloadRepeatPostingsEnum(RepeatTermSpans backing) {
+      super(backing);
+    }
+
+    @Override
+    public BytesRef getPayload() throws IOException {
+      return backing.bufferIndex < 0 ? backingPostings.getPayload()
+          : (payload != null ? payload : (payload = backingBuf.payloadBuffer[backing.bufferIndex & backingBuf.indexMask]));
+    }
+
+    @Override
+    public void reset() {
+      super.reset();
+      payload = null;
+    }
+
+  }
+
+  private static class RepeatPostingsEnum extends PostingsEnum implements ResettablePostings {
+
+    protected final RepeatTermSpans backing;
+    protected final TermSpansRepeatBuffer backingBuf;
+    private final TermSpans backingSpans;
+    protected final PostingsEnum backingPostings;
     private int startOffset = -1;
     private int endOffset = -1;
 
@@ -479,7 +562,7 @@ public class TermSpansRepeatBuffer {
       this.backingPostings = backingSpans.postings;
     }
     
-    private void reset() {
+    public void reset() {
       startOffset = -1;
       endOffset = -1;
     }
