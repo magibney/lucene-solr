@@ -571,7 +571,7 @@ public class CoreContainer {
     configSetsHandler = createHandler(CONFIGSETS_HANDLER_PATH, cfg.getConfigSetsHandlerClass(), ConfigSetsHandler.class);
 
     // metricsHistoryHandler uses metricsHandler, so create it first
-    metricsHandler = new MetricsHandler(metricManager);
+    metricsHandler = new MetricsHandler(this);
     containerHandlers.put(METRICS_PATH, metricsHandler);
     metricsHandler.initializeMetrics(metricManager, SolrInfoBean.Group.node.toString(), metricTag, METRICS_PATH);
 
@@ -1776,7 +1776,7 @@ public class CoreContainer {
    * @return true if we were able to successfuly perisist the repaired coreDescriptor, false otherwise.
    *
    * See SOLR-11503, This can be removed when there's no chance we'll need to upgrade a
-   * Solr isntallation createged with legacyCloud=true from 6.6.1 through 7.1
+   * Solr installation created with legacyCloud=true from 6.6.1 through 7.1
    */
   public boolean repairCoreProperty(CoreDescriptor cd, String prop) {
     // So far, coreNodeName is the only property that we need to repair, this may get more complex as other properties
@@ -1806,8 +1806,12 @@ public class CoreContainer {
     return false;
   }
 
-  public void checkTragicException(SolrCore solrCore) {
-    Throwable tragicException = null;
+  /**
+   * @param solrCore te core against which we check if there has been a tragic exception
+   * @return whether this solr core has tragic exception
+   */
+  public boolean checkTragicException(SolrCore solrCore) {
+    Throwable tragicException;
     try {
       tragicException = solrCore.getSolrCoreState().getTragicException();
     } catch (IOException e) {
@@ -1820,6 +1824,8 @@ public class CoreContainer {
         getZkController().giveupLeadership(solrCore.getCoreDescriptor(), tragicException);
       }
     }
+    
+    return tragicException != null;
   }
 
 }

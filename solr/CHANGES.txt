@@ -59,7 +59,7 @@ Jetty 9.4.11.v20180605
 Upgrade Notes
 ----------------------
 
-* The data-driven schema no longer returns the *_str field-copy of text fields by default. The *_str field is still 
+* The data-driven schema no longer returns the *_str field-copy of text fields by default. The *_str field is still
   created and can be used for e.g. sorting, but to retrieve it you now need to explicitly list it in "fl" (SOLR-12350)
 
 * LUCENE-7976: TieredMergePolicy now respects maxSegmentSizeMB by default when executing
@@ -114,6 +114,27 @@ New Features
 
 * SOLR-12522: Support a runtime function `#ALL` for 'replica' in autoscaling policies (noble)
 
+* SOLR-12567: JSON Facet "functions" now support an extended "type:func" syntax, similar to other types
+  of facets.  This also allows additional local params to be specified for if the aggregation function
+  can take advantage of them.  (hossman)
+
+* SOLR-12581: the JSON Facet 'relatedness()' aggregate function now supports a 'min_popularity' option
+  using the extended type:func syntax (hossman)
+
+* SOLR-12536: autoscaling policy support to equally distribute replicas on the basis of arbitrary properties (noble)
+
+* SOLR-8207: Add "Nodes" view to the Admin UI "Cloud" tab, listing nodes and key metrics (janhoy)
+
+* SOLR-11990: Make it possible to co-locate replicas of multiple collections together in a node. A collection may be
+  co-located with another collection during collection creation time by specifying a 'withCollection' parameter. It can
+  also be co-located afterwards by using the modify collection API. The co-location guarantee is enforced regardless of
+  future cluster operations whether they are invoked manually via the Collection API or by the Autoscaling framework.
+  (noble, shalin)
+
+* SOLR-12402: Factor out SolrDefaultStreamFactory class. (Christine Poerschke)
+
+* SOLR-12592: support #EQUAL function in cores in autoscaling policies (noble)
+
 Bug Fixes
 ----------------------
 
@@ -162,6 +183,25 @@ Bug Fixes
 * SOLR-12570: OpenNLPExtractNamedEntitiesUpdateProcessor cannot support multi fields because pattern replacement
   doesn't work correctly. (Koji Sekiguchi)
 
+* SOLR-12576: Update ref guide for additional information displayed in cloud view (Erick Erickson)
+
+* SOLR-12597: Migrate API should fail requests that do not specify split.key parameter (shalin)
+
+* SOLR-12477: An update would return a client error(400) if it hit a AlreadyClosedException.
+  We now return the error as a server error(500) instead (Jeffery via Varun Thacker)
+  
+* SOLR-12606: Fix InfixSuggestersTest.testShutdownDuringBuild() failures. (Steve Rowe)
+
+* SOLR-12607: Fixed two separate bugs in shard splits which can cause data loss. The first case is when using TLOG
+  replicas only, the updates forwarded from parent shard leader to the sub-shard leader are written only in tlog and
+  not the index. If this happens after the buffered updates have been replayed then the updates can never be executed
+  even though they remain the transaction log. The second case is when synchronously forwarding updates to sub-shard
+  leader fails and the underlying errors are not propagated to the client. (Cao Manh Dat, shalin)
+
+* SOLR-12344: SolrSlf4jReporter doesn't set MDC context. (ab)
+
+* SOLR-12594: MetricsHistoryHandler.getOverseerLeader fails when hostname contains hyphen. (ab)
+
 Optimizations
 ----------------------
 
@@ -176,8 +216,12 @@ Optimizations
   which we can export is directly proportional to the number of sort fields specified. This change also allows streaming
   expressions to group by on more than 4 fields. (Aroop Ganguly, Amrit Sarkar, Varun Thacker)
 
-* SOLR-12305: When a replica is applying updates, some kind of updates can skip buffering for faster recovery. 
+* SOLR-12305: When a replica is applying updates, some kind of updates can skip buffering for faster recovery.
   (Cao Manh Dat)
+
+* SOLR-12509: Improve SplitShardCmd performance and reliability. A new method of splitting has been
+  introduced (splitMethod=link) which uses hard-linking of index files when possible, resulting in
+  significant speedups and reduced CPU / IO load on shard leader. (ab)
 
 Other Changes
 ----------------------
@@ -201,6 +245,10 @@ Other Changes
 * SOLR-12464: Reduce Overseer.close() logging (for non-Overseer leaders) (Christine Poerschke)
 
 * SOLR-12454: Tweak Overseer leadership transition related logging for easier troubleshooting. (Christine Poerschke)
+
+* SOLR-12574: Put under a common "significantTerms" bucket all output by SignificantTerms Query Parser (Alexandre Rafalovitch)
+
+* SOLR-12164: Improve Ref Guide main landing page. (Cassandra Targett)
 
 ==================  7.4.0 ==================
 
@@ -470,7 +518,7 @@ Bug Fixes
 
 * SOLR-12434: bin/solr {config,healthcheck} ignore ZK_HOST in solr.in.{sh,cmd} (Steve Rowe)
 
-* SOLR-12481: update.autoCreateFields must be set via Config API command 'set-user-property', 
+* SOLR-12481: update.autoCreateFields must be set via Config API command 'set-user-property',
   but 'bin/solr create' tells users to use the default action 'set-property', which fails
   because the property is not editable. (Steve Rowe)
 

@@ -89,3 +89,13 @@ Computing scores at collection time is less efficient than running a second
 request in order to only compute scores for documents that made it to the top
 hits. As a consequence, the trackDocScores option has been removed and can be
 replaced with the new TopFieldCollector#populateScores helper method.
+
+## IndexSearcher.search(After) may return lower bounds of the hit count and TopDocs.totalHits is no longer a long ##
+
+Lucene 8 received optimizations for collection of top-k matches by not visiting
+all matches. However these optimizations won't help if all matches still need
+to be visited in order to compute the total number of hits. As a consequence,
+IndexSearcher's search and searchAfter methods were changed to only count hits
+accurately up to 1,000, and Topdocs.totalHits was changed from a long to an
+object that says whether the hit count is accurate or a lower bound of the
+actual hit count.

@@ -96,6 +96,10 @@ Changes in Runtime Behavior
 * LUCENE-7444: StandardAnalyzer no longer defaults to removing English stopwords
   (Alan Woodward)
 
+* LUCENE-8060: IndexSearcher's search and searchAfter methods now only compute
+  total hit counts accurately up to 1,000 in order to enable top-hits
+  optimizations such as block-max WAND (LUCENE-8135). (Adrien Grand)
+
 Improvements
 
 * LUCENE-7997: Add BaseSimilarityTestCase to sanity check similarities.
@@ -161,6 +165,15 @@ API Changes:
   new deletesPctAllowed setting to control how aggressively deletes should be
   reclaimed. (Erick Erickson, Adrien Grand)
 
+* LUCENE-7314: Graduate LatLonPoint and query classes to core (Nick Knize)
+
+* LUCENE-8428: The way that oal.util.PriorityQueue creates sentinel objects has
+  been changed from a protected method to a java.util.function.Supplier as a
+  constructor argument. (Adrien Grand)
+
+* LUCENE-8437: CheckIndex.Status.cantOpenSegments and missingSegmentVersion
+  have been removed as they were not computed correctly. (Adrien Grand)
+
 Bug Fixes:
 
 * LUCENE-8380: UTF8TaxonomyWriterCache inconsistency. (Ruslan Torobaev, Dawid Weiss)
@@ -183,6 +196,12 @@ Bug Fixes:
 
 * LUCENE-8398: TieredMergePolicy.getMaxMergedSegmentMB has rounding error (Erick Erickson)
 
+* LUCENE-8429: DaciukMihovAutomatonBuilder is no longer prone to stack
+  overflows by enforcing a maximum term length. (Adrien Grand)
+
+* LUCENE-8441: IndexWriter now checks doc value type for index sort fields
+  and fails the document if they are not compatible. (Jim Ferenczi, Mike McCandless)
+
 Changes in Runtime Behavior:
 
 * LUCENE-7976: TieredMergePolicy now respects maxSegmentSizeMB by default when executing
@@ -194,6 +213,10 @@ Changes in Runtime Behavior:
 
 Improvements
 
+* LUCENE-8440: Add support for indexing and searching Line and Point shapes using LatLonShape encoding (Nick Knize)
+
+* LUCENE-8435: Add new LatLonShapePolygonQuery for querying indexed LatLonShape fields by arbitrary polygons (Nick Knize)
+
 * LUCENE-8367: Make per-dimension drill down optional for each facet dimension (Mike McCandless)
 
 * LUCENE-8396: Add Points Based Shape Indexing and Search that decomposes shapes
@@ -201,6 +224,10 @@ Improvements
 
 * LUCENE-8345, GitHub PR #392: Remove instantiation of redundant wrapper classes for primitives;
   add wrapper class constructors to forbiddenapis.  (Michael Braun via Uwe Schindler)
+
+* LUCENE-8415: Clean up Directory contracts and JavaDoc comments. (Dawid Weiss)
+
+* LUCENE-8414: Make segmentInfos private in IndexWriter (Simon Willnauer, Nhat Nguyen)
 
 Other:
 

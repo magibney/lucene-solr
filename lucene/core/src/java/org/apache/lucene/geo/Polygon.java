@@ -116,7 +116,7 @@ public final class Polygon {
     this.maxLat = maxLat;
     this.minLon = minLon;
     this.maxLon = maxLon;
-    this.windingOrder = (windingSum < 0) ? GeoUtils.WindingOrder.CW : GeoUtils.WindingOrder.CCW;
+    this.windingOrder = (windingSum < 0) ? GeoUtils.WindingOrder.CCW : GeoUtils.WindingOrder.CW;
   }
 
   /** returns the number of vertex points */
@@ -199,6 +199,36 @@ public final class Polygon {
       sb.append(", holes=");
       sb.append(Arrays.toString(holes));
     }
+    return sb.toString();
+  }
+
+  public static String verticesToGeoJSON(final double[] lats, final double[] lons) {
+    StringBuilder sb = new StringBuilder();
+    sb.append('[');
+    for (int i = 0; i < lats.length; i++) {
+      sb.append("[")
+          .append(lons[i])
+          .append(", ")
+          .append(lats[i])
+          .append("]");
+      if (i != lats.length - 1) {
+        sb.append(", ");
+      }
+    }
+    sb.append(']');
+    return sb.toString();
+  }
+
+  /** prints polygons as geojson */
+  public String toGeoJSON() {
+    StringBuilder sb = new StringBuilder();
+    sb.append("[");
+    sb.append(verticesToGeoJSON(polyLats, polyLons));
+    for (Polygon hole : holes) {
+      sb.append(",");
+      sb.append(verticesToGeoJSON(hole.polyLats, hole.polyLons));
+    }
+    sb.append("]");
     return sb.toString();
   }
 
