@@ -20,7 +20,6 @@ import java.io.IOException;
 import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.spans.PositionDeque.Node;
-import org.apache.lucene.util.AttributeSource;
 import org.apache.lucene.util.BytesRef;
 
 /**
