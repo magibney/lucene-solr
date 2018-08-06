@@ -37,7 +37,25 @@ import org.apache.lucene.search.spans.NearSpansOrdered.SpansEntryBase;
 import org.apache.lucene.search.spans.SpanNearQuery.ComboMode;
 
 /**
- *
+ * This class implements a backtracking-capable wrapper for advancing through a backing Spans. In its most basic use,
+ * it allows to store and replay cursor states of its backing Spans. This class is basically a queue implemented as a
+ * circular buffer over a resizable backing array, with support for efficient random-access seek, iteration, and
+ * arbitrary element removal, and with stable int offset references (with respect to backing array, mod capacity of
+ * backing array).
+ * 
+ * This class also encapsulates much of the logic for *using* the queue, because each Node in the queue represents
+ * the state of the backing Spans at a given cursor position, but also potentially represents a component of valid
+ * phrase path(s) across different Spans/phrase-positions. The nodes are really nodes in a two-dimensional queue, with
+ * node removal driven either with respect to the Spans-aligned or Spans-transverse dimensions. This behavior justifies
+ * the special-purpose data structure, and explains why the data structure is relatively tightly coupled with logic for
+ * its own construction and traversal.
+ * 
+ * Having a linked data structure like this in the hot path of user query execution results in the creation of a
+ * significant amount of objects (Nodes and linking nodes to link them to each other). To avoid excessive GC, this
+ * implementation by default pools these objects per-Queue, and recycles them using an efficient queue-based per-Node
+ * reuse strategy. In case of bugs, object pooling can be statically disabled using the POOL_NODES boolean class
+ * variable. This disables only the actual reuse of objects, but the overhead of maintaining dead-end reuse queues is
+ * quite low, and should have minimal impact on performance.
  */
 public class PositionDeque implements Iterable<Spans> {
 
@@ -62,6 +80,7 @@ public class PositionDeque implements Iterable<Spans> {
   private int tail = 0;
   private int head = 0;
   
+  // allows provisional nodes to resuse same offset id/index, while preserving a unique phraseScopeId.
   private final long repeatProvisionalIncrement;
 
   public PositionDeque(int size, boolean offsets, Iterator<PositionDeque> reuseInput, List<PositionDeque> reuseOutput, RecordingPushbackSpans driver, boolean supporVariableTermSpansLength, ComboMode comboMode) {
@@ -1002,6 +1021,11 @@ public class PositionDeque implements Iterable<Spans> {
 
   private final FullPositionsIter fullPositionsIter;
   
+  /**
+   * In preparation for the deletion of the specified Node n, delete links from subsequent phrase positions that refer
+   * back to the specified Node. Recursively prune any subsequent node that *only* refers back to the specified Node.
+   * @param n 
+   */
   private void deleteBacklinks(Node n) {
     //System.err.println("delete backlinks to node "+n+"["+n.deque.phraseIndex+"]");
     n.initialzedReverseLinks.remove();
@@ -1049,6 +1073,15 @@ public class PositionDeque implements Iterable<Spans> {
 
   private int passId = -1;
   
+  /**
+   * Public entrypoint for building a "lattice" of Spans-transverse phrase links for a given startPosition.
+   * 
+   * @param minStart
+   * @param remainingSlopToCaller
+   * @param comboMode
+   * @return
+   * @throws IOException 
+   */
   public DLLReturnNode buildLattice(int minStart, int remainingSlopToCaller, ComboMode comboMode) throws IOException {
     final DLLReturnNode anchor = returned.anchor;
     DLLReturnNode drn = returned.next;
@@ -1212,6 +1245,10 @@ public class PositionDeque implements Iterable<Spans> {
     }
   }
 
+  /**
+   * Recursively adjust preliminary cached slop-to-start/end based on complete/current path information;
+   * recursively prune nodes that no longer have a valid path to start/end.
+   */
   private void revisitPruneBacklinks() {
     PositionDeque pd = this.next;
     do {
@@ -1293,6 +1330,22 @@ public class PositionDeque implements Iterable<Spans> {
   
   private final boolean supportVariableTermSpansLength;
   
+  /**
+   * Recursive (phrase-position-per-level) method for building Spans-transverse links for slop-valid phrase paths.
+   * This performs a depth-first traversal of the graph, caching paths where possible to avoid re-traversal of
+   * sub-graphs (to end) that have been full explored (for the given input slop available).
+   * 
+   * @param caller
+   * @param hardMinStart
+   * @param softMinStart
+   * @param startCeiling
+   * @param minEnd
+   * @param remainingSlopToCaller
+   * @param comboMode
+   * @param passId
+   * @return
+   * @throws IOException 
+   */
   private boolean buildLattice(final Node caller, final int hardMinStart, final int softMinStart, final int startCeiling, final int minEnd, final int remainingSlopToCaller, final ComboMode comboMode, final int passId) throws IOException {
     //System.err.println("here["+phraseIndex+"]!! "+caller+", "+softMinStart+", "+startCeiling+", "+remainingSlopToCaller+" ("+lstToString()+")");
     final int previousMaxSlopToCaller = caller.maxSlopToCaller;
@@ -1597,6 +1650,15 @@ public class PositionDeque implements Iterable<Spans> {
 
   private static final int DECREASED_END_POSITION = 1, INCREASED_WIDTH = 1 << 1;
 
+  /**
+   * Based on indexed data (if available), determine whether it is possible for subsequent positions to expose new
+   * match possibilities (and thus, whether to continue advancing in search of a(nother) match). Determine based on
+   * state (whether a match has been found) and configuration whether to continue searching for a(nother) match.
+   * 
+   * @param extantWidth
+   * @param noMatchYet
+   * @return 
+   */
   private int checkForIncreasedMatchLength(int extantWidth, boolean noMatchYet) {
     if (comboMode == ComboMode.GREEDY_END_POSITION && !noMatchYet) {
       return 0;
@@ -2013,6 +2075,11 @@ public class PositionDeque implements Iterable<Spans> {
     }
     
   }
+  
+  /**
+   * Used to track Nodes that have been included in results based on potentially incomplete cached information. A second
+   * pass is necessary to revisit these nodes and potentially update them with current slop information.
+   */
   static final class RevisitNode {
 
     private final RevisitNode anchor;
@@ -2364,6 +2431,9 @@ public class PositionDeque implements Iterable<Spans> {
     }
   }
 
+  /**
+   * The Node class is the main node used in the "two-dimensional Queue" consisting of parallel PositionDeques.
+   */
   static class Node extends Spans implements SpanCollector {
 
     private int outputPassId = -1;
@@ -2441,13 +2511,6 @@ public class PositionDeque implements Iterable<Spans> {
     private DLLNode phrasePrevNoOutput = null;
     private DLLNode lastPassPhrasePrev = null;
 
-
-    /**
-     * From this node, the previous phrase node with max startPosition/endPosition
-     * Does not necessarily represent a slop-valid path to phrase s
-     * Once set, changes only if the phraseNext node is deleted.
-     * The phraseNext node will have a phrasePrev reference to this node.
-     */
 
     public Node(PositionDeque[] dequePointer, int phraseIndex) {
       this.dequePointer = dequePointer;
@@ -2688,6 +2751,8 @@ public class PositionDeque implements Iterable<Spans> {
     
   }
 
+  private static final boolean POOL_NODES = true; // provide a way to statically disable object pooling
+  
   private Node nodePoolHead = null;
   private Node nodePoolTail = null;
   private Node nodePoolReturnQueueHead = null;
@@ -2706,28 +2771,30 @@ public class PositionDeque implements Iterable<Spans> {
 
   private void returnNodesToPool() {
     if (nodePoolReturnQueueHead != null) {
-      final Node limit = nodePoolReturnQueueTail;
-      Node n = nodePoolReturnQueueHead;
-      pool.returnLinksToPool(n.pool);
-      if (n.endNodeLinks != null) {
-        n.endNodeLinks.clear();
-      }
-      int i = 0;
-      if (n != limit) {
-        do {
-          n = n.trackNextRef;
-          pool.returnLinksToPool(n.pool);
-          if (n.endNodeLinks != null) {
-            n.endNodeLinks.clear();
-          }
-        } while (n != limit);
-      }
-      if (nodePoolHead != null) {
-        nodePoolReturnQueueTail.trackNextRef = nodePoolHead;
-        nodePoolHead = nodePoolReturnQueueHead;
-      } else {
-        nodePoolHead = nodePoolReturnQueueHead;
-        nodePoolTail = nodePoolReturnQueueTail;
+      if (POOL_NODES) {
+        final Node limit = nodePoolReturnQueueTail;
+        Node n = nodePoolReturnQueueHead;
+        pool.returnLinksToPool(n.pool);
+        if (n.endNodeLinks != null) {
+          n.endNodeLinks.clear();
+        }
+        int i = 0;
+        if (n != limit) {
+          do {
+            n = n.trackNextRef;
+            pool.returnLinksToPool(n.pool);
+            if (n.endNodeLinks != null) {
+              n.endNodeLinks.clear();
+            }
+          } while (n != limit);
+        }
+        if (nodePoolHead != null) {
+          nodePoolReturnQueueTail.trackNextRef = nodePoolHead;
+          nodePoolHead = nodePoolReturnQueueHead;
+        } else {
+          nodePoolHead = nodePoolReturnQueueHead;
+          nodePoolTail = nodePoolReturnQueueTail;
+        }
       }
       nodePoolReturnQueueHead = null;
       nodePoolReturnQueueTail = null;
