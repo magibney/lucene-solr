@@ -39,10 +39,11 @@ public class ExtendedDismaxQParserPlugin extends QParserPlugin {
   public static final String EXPLICIT_PHRASE_AS_GRAPH_QUERY_ARGNAME = "explicitPhraseAsGraphQuery";
   public static final String MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME = "multiphraseAsGraphQuery";
   public static final String EXPLICIT_MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME = "explicitMultiphraseAsGraphQuery";
-  public static final boolean DEFAULT_PHRASE_AS_GRAPH_QUERY_ARGNAME = false;
-  public static final boolean DEFAULT_EXPLICIT_PHRASE_AS_GRAPH_QUERY_ARGNAME = false;
-  public static final boolean DEFAULT_MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME = false;
-  public static final boolean DEFAULT_EXPLICIT_MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME = false;
+  public static final boolean DEFAULT_PHRASE_AS_GRAPH_QUERY = false;
+  public static final boolean DEFAULT_EXPLICIT_PHRASE_AS_GRAPH_QUERY = false;
+  public static final boolean DEFAULT_MULTIPHRASE_AS_GRAPH_QUERY = false;
+  public static final boolean DEFAULT_EXPLICIT_MULTIPHRASE_AS_GRAPH_QUERY = false;
+  public static final boolean DEFAULT_USE_LEGACY_IMPLEMENTATION = false;
   
   private NamedList graphQueryFilterSpec;
   private GraphQueryFilter graphQueryFilter;
@@ -55,10 +56,10 @@ public class ExtendedDismaxQParserPlugin extends QParserPlugin {
   public void init(NamedList args) {
     graphQueryFilterSpec = (NamedList)args.remove(GRAPH_QUERY_FILTER_ARGNAME);
     Boolean tmp;
-    phraseAsGraphQuery = (tmp = args.removeBooleanArg(PHRASE_AS_GRAPH_QUERY_ARGNAME)) == null ? DEFAULT_PHRASE_AS_GRAPH_QUERY_ARGNAME : tmp;
-    explicitPhraseAsGraphQuery = (tmp = args.removeBooleanArg(EXPLICIT_PHRASE_AS_GRAPH_QUERY_ARGNAME)) == null ? DEFAULT_EXPLICIT_PHRASE_AS_GRAPH_QUERY_ARGNAME : tmp;
-    multiphraseAsGraphQuery = (tmp = args.removeBooleanArg(MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME)) == null ? DEFAULT_MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME : tmp;
-    explicitMultiphraseAsGraphQuery = (tmp = args.removeBooleanArg(EXPLICIT_MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME)) == null ? DEFAULT_EXPLICIT_MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME : tmp;
+    phraseAsGraphQuery = (tmp = args.removeBooleanArg(PHRASE_AS_GRAPH_QUERY_ARGNAME)) == null ? DEFAULT_PHRASE_AS_GRAPH_QUERY : tmp;
+    explicitPhraseAsGraphQuery = (tmp = args.removeBooleanArg(EXPLICIT_PHRASE_AS_GRAPH_QUERY_ARGNAME)) == null ? DEFAULT_EXPLICIT_PHRASE_AS_GRAPH_QUERY : tmp;
+    multiphraseAsGraphQuery = (tmp = args.removeBooleanArg(MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME)) == null ? DEFAULT_MULTIPHRASE_AS_GRAPH_QUERY : tmp;
+    explicitMultiphraseAsGraphQuery = (tmp = args.removeBooleanArg(EXPLICIT_MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME)) == null ? DEFAULT_EXPLICIT_MULTIPHRASE_AS_GRAPH_QUERY : tmp;
     super.init(args);
   }
 
