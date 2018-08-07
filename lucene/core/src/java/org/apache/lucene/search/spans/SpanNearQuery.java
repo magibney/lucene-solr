@@ -59,6 +59,7 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
     private final String field;
     private final List<SpanQuery> clauses = new LinkedList<>();
     private int slop;
+    private boolean legacy;
     private String shingleFieldSuffix;
     private Set<BytesRef> shingles;
 
@@ -82,6 +83,7 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
     public Builder(SpanNearQuery q) {
       this(q.field, q.inOrder, q.comboMode, q.comboThreshold, q.allowOverlap, q.combineRepeatSpans, q.supportVariableTermSpansLength);
       this.clauses.addAll(q.clauses);
+      this.setLegacyImplementation(q.legacy);
     }
     public Builder(String field, boolean ordered, ComboMode comboMode, int comboThreshold, boolean allowOverlap,
         boolean combineRepeatSpans, boolean supportVariableTermSpansLength) {
@@ -122,6 +124,11 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
       return this;
     }
 
+    public final Builder setLegacyImplementation(boolean legacy) {
+      this.legacy = legacy;
+      return this;
+    }
+
     /**
      * Set shingles required for this query to match at specified slop
      * @param shingles
@@ -140,7 +147,7 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
      * Build the query
      */
     public SpanNearQuery build() {
-      return new SpanNearQuery(clauses.toArray(new SpanQuery[clauses.size()]), slop, ordered, comboMode, comboThreshold, allowOverlap, combineRepeatSpans, supportVariableTermSpansLength, shingleFieldSuffix, shingles);
+      return new SpanNearQuery(clauses.toArray(new SpanQuery[clauses.size()]), slop, ordered, comboMode, comboThreshold, allowOverlap, combineRepeatSpans, supportVariableTermSpansLength, shingleFieldSuffix, shingles, legacy);
     }
 
   }
@@ -164,6 +171,7 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
   protected final String shingleFieldName;
   protected final Term[] shingles;
   protected boolean inOrder;
+  private final boolean legacy;
 
   /**
    * Allow overlapping matches
@@ -210,6 +218,7 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
   public static final boolean DEFAULT_ALLOW_OVERLAP = true;
   public static final boolean DEFAULT_COMBINE_REPEAT_SPANS = true;
   public static final boolean DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH = false;
+  public static final boolean DEFAULT_LEGACY_IMPLEMENTAION = false;
 
   private static final String IMPOSSIBLE_FIELD_NAME = "\uFFFC\uFFFC\uFFFC\uFFFC"; // slightly different from edismax I_F_N
   protected final String field;
@@ -229,7 +238,8 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
    * @param allowOverlap
    */
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode, int comboThreshold, boolean allowOverlap,
-      boolean combineRepeatSpans, boolean supportVariableTermSpansLength, String shingleFieldSuffix, Set<BytesRef> shingles) {
+      boolean combineRepeatSpans, boolean supportVariableTermSpansLength, String shingleFieldSuffix, Set<BytesRef> shingles, boolean legacy) {
+    this.legacy = legacy;
     this.clauses = new ArrayList<>(clausesIn.length);
     if (clausesIn.length < 1) {
       // workaround to avoid NPE
@@ -266,24 +276,28 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
     this.inOrder = inOrder;
   }
 
+  public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode, int comboThreshold, boolean allowOverlap,
+      boolean combineRepeatSpans, boolean supportVariableTermSpansLength, String shingleFieldSuffix, Set<BytesRef> shingles) {
+    this(clausesIn, slop, inOrder, comboMode, comboThreshold, allowOverlap, combineRepeatSpans, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, shingleFieldSuffix, shingles, DEFAULT_LEGACY_IMPLEMENTAION);
+  }
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode, int comboThreshold, boolean allowOverlap, boolean combineRepeatSpans) {
-    this(clausesIn, slop, inOrder, comboMode, comboThreshold, allowOverlap, combineRepeatSpans, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null);
+    this(clausesIn, slop, inOrder, comboMode, comboThreshold, allowOverlap, combineRepeatSpans, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTAION);
   }
 
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode, int comboThreshold, boolean allowOverlap) {
-    this(clausesIn, slop, inOrder, comboMode, comboThreshold, allowOverlap, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null);
+    this(clausesIn, slop, inOrder, comboMode, comboThreshold, allowOverlap, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTAION);
   }
 
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode, int comboThreshold) {
-    this(clausesIn, slop, inOrder, comboMode, comboThreshold, DEFAULT_ALLOW_OVERLAP, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null);
+    this(clausesIn, slop, inOrder, comboMode, comboThreshold, DEFAULT_ALLOW_OVERLAP, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTAION);
   }
 
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode) {
-    this(clausesIn, slop, inOrder, comboMode, DEFAULT_COMBO_THRESHOLD, DEFAULT_ALLOW_OVERLAP, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null);
+    this(clausesIn, slop, inOrder, comboMode, DEFAULT_COMBO_THRESHOLD, DEFAULT_ALLOW_OVERLAP, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTAION);
   }
 
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder) {
-    this(clausesIn, slop, inOrder, DEFAULT_COMBO_MODE, DEFAULT_COMBO_THRESHOLD, DEFAULT_ALLOW_OVERLAP, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null);
+    this(clausesIn, slop, inOrder, DEFAULT_COMBO_MODE, DEFAULT_COMBO_THRESHOLD, DEFAULT_ALLOW_OVERLAP, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTAION);
   }
 
   /** Return the clauses whose spans are matched. */
@@ -357,7 +371,7 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
         subWeights.add(q.createWeight(searcher, scoreMode, boost));
       }
     }
-    return new SpanNearWeight(subWeights, searcher, scoreMode.needsScores() ? getTermStates(subWeights) : null, boost);
+    return new SpanNearWeight(subWeights, searcher, scoreMode.needsScores() ? getTermStates(subWeights) : null, boost, legacy);
   }
 
   private static final int SUPPORT_PARALLEL_REUSE_LIMIT = 2; // e.g. for bulkScorer and scorer
@@ -378,9 +392,11 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
     private final int[] ordSpanCounts;
     private LinkedList<ReuseStruct> reuseQueue = new LinkedList<>();
     private final ComboMode weightComboMode;
+    private final boolean legacy;
 
-    public SpanNearWeight(List<SpanWeight> subWeights, IndexSearcher searcher, Map<Term, TermStates> terms, float boost) throws IOException {
+    public SpanNearWeight(List<SpanWeight> subWeights, IndexSearcher searcher, Map<Term, TermStates> terms, float boost, boolean legacy) throws IOException {
       super(SpanNearQuery.this, searcher, terms, boost);
+      this.legacy = legacy;
       this.weightComboMode = /*terms == null ? ComboMode.GREEDY_END_POSITION :*/ comboMode;
       this.subWeights = subWeights;
       this.ordSpanCounts = new int[searcher.getIndexReader().leaves().size()];
@@ -473,9 +489,13 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
           }
           shinglesSpans = ShinglesSpans.pseudoSpansOver(shinglePostings, slop);
         }
-        return new NearSpansOrdered(slop, subSpans, weightComboMode, comboThreshold, allowOverlap,
-            combineRepeatSpans, reuseIter, reuse, (requiredPostings.getRequiredPostings() & PostingsEnum.OFFSETS) != 0,
-            supportVariableTermSpansLength, reuseDequeIter, reuseDeque, shinglesSpans);
+        if (legacy) {
+          return new LegacyNearSpansOrdered(slop, subSpans, shinglesSpans);
+        } else {
+          return new NearSpansOrdered(slop, subSpans, weightComboMode, comboThreshold, allowOverlap,
+              combineRepeatSpans, reuseIter, reuse, (requiredPostings.getRequiredPostings() & PostingsEnum.OFFSETS) != 0,
+              supportVariableTermSpansLength, reuseDequeIter, reuseDeque, shinglesSpans);
+        }
       }
     }
 

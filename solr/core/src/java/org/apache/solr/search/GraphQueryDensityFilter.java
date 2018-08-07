@@ -53,6 +53,8 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
   private static final int DEFAULT_MAX_DENSE_CLAUSES = Integer.MAX_VALUE; //10?
   private static final int DEFAULT_MAX_CLAUSES = Integer.MAX_VALUE; //1000?
   private static final int DEFAULT_MAX_SUPPORTED_SLOP = Integer.MAX_VALUE; //100?
+  private static final boolean DEFAULT_USE_LEGACY_IMPLEMENTATION = false;
+  private boolean useLegacyImplementation;
   private boolean initializedFieldDensities;
   private NamedList<Integer> denseFields;
   private int maxDenseClauses;
@@ -95,6 +97,7 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
       ex.printStackTrace(System.err);
       this.shingleWords = null;
     }
+    useLegacyImplementation = (tmpBool = args.removeBooleanArg("useLegacyImplementation")) == null ? DEFAULT_USE_LEGACY_IMPLEMENTATION : tmpBool;
   }
 
   @Override
@@ -342,6 +345,7 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
           }
         }
         builder.setSlop(slop);
+        builder.setLegacyImplementation(useLegacyImplementation);
         if (shingles != null) {
           builder.setShingles(shingleFieldSuffix, shingles);
         }
