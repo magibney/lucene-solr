@@ -23,28 +23,68 @@ import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.similarities.Similarity;
+import org.apache.lucene.store.ByteArrayDataInput;
+import org.apache.lucene.util.BytesRef;
 
 /**
  * Expert:
  * Public for extension only.
  * This does not work correctly for terms that indexed at position Integer.MAX_VALUE.
  */
-public class TermSpans extends Spans {
+public class TermSpans extends Spans implements IndexLookahead {
+  
+  public static final byte[] MAGIC_NUMBER;
+  public static final int MAGIC_STABLE_LENGTH;
+  public static final byte ENCODE_LOOKAHEAD = -31;
+  public static final byte NO_ENCODE_LOOKAHEAD = -30;
+  static {
+    MAGIC_NUMBER = new byte[]{-75, NO_ENCODE_LOOKAHEAD};
+    MAGIC_STABLE_LENGTH = MAGIC_NUMBER.length - 1;
+  }
+
+  static boolean isMagicPayload(BytesRef br) {
+    if (br.length < MAGIC_NUMBER.length) {
+      return false;
+    }
+    final byte[] bytes = br.bytes;
+    final int offset = br.offset;
+    for (int i = 0; i < MAGIC_STABLE_LENGTH; i++) {
+      if (MAGIC_NUMBER[i] != bytes[offset + i]) {
+        return false;
+      }
+    }
+    switch (bytes[offset + MAGIC_STABLE_LENGTH]) {
+      case ENCODE_LOOKAHEAD:
+      case NO_ENCODE_LOOKAHEAD:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private static final int NO_PAYLOAD_POSITION_LENGTH = Integer.MIN_VALUE;
+  private static final int PAYLOAD_POSITION_LENGTH_UNINITIALIZED = -1;
+  private static final int FIELD_POSITION_LENGTH_UNINITIALIZED = -2;
+  
   protected final PostingsEnum postings;
+  private final ByteArrayDataInput positionLengthReader = new ByteArrayDataInput();
   protected final Term term;
   protected int doc;
   protected int freq;
   protected int count;
   protected int position;
+  protected int positionLength = -1;
+  protected boolean encodedLookahead = false;
   protected boolean readPayload;
   private final float positionsCost;
 
   public TermSpans(Similarity.SimScorer scorer,
-                    PostingsEnum postings, Term term, float positionsCost) {
+                    PostingsEnum postings, Term term, float positionsCost, int postingsFlags) {
     this.postings = Objects.requireNonNull(postings);
     this.term = Objects.requireNonNull(term);
     this.doc = -1;
     this.position = -1;
+    this.positionLength = FIELD_POSITION_LENGTH_UNINITIALIZED;
     assert positionsCost > 0; // otherwise the TermSpans should not be created.
     this.positionsCost = positionsCost;
   }
@@ -56,6 +96,7 @@ public class TermSpans extends Spans {
       freq = postings.freq();
       assert freq >= 1;
       count = 0;
+      resetLookahead();
     }
     position = -1;
     return doc;
@@ -69,9 +110,18 @@ public class TermSpans extends Spans {
       freq = postings.freq();
       assert freq >= 1;
       count = 0;
+      resetLookahead();
     }
     position = -1;
     return doc;
+  }
+
+  private void resetLookahead() {
+    if (lookaheadNextStartPositionFloor != UNKNOWN_AT_SPANS) {
+      // set together; only need to check one.
+      lookaheadNextStartPositionFloor = UNINITIALIZED_AT_DOC;
+      maxPositionLength = UNINITIALIZED_AT_DOC;
+    }
   }
 
   @Override
@@ -79,8 +129,40 @@ public class TermSpans extends Spans {
     return doc;
   }
 
+  private int maxPositionLength = UNINITIALIZED_AT_SPANS;
+
+  @Override
+  public int positionLengthCeiling() {
+    return maxPositionLength;
+  }
+
+  private int lookaheadNextStartPositionFloor = UNINITIALIZED_AT_SPANS;
+
+  @Override
+  public int lookaheadNextStartPositionFloor() throws IOException {
+    if (position < 0) {
+      return lookaheadNextStartPositionFloor;
+    }
+    switch (positionLength) {
+      case NO_PAYLOAD_POSITION_LENGTH:
+        return UNKNOWN_AT_DOC;
+      default:
+        return lookaheadNextStartPositionFloor;
+      case FIELD_POSITION_LENGTH_UNINITIALIZED:
+        getPositionLength(false);
+        return lookaheadNextStartPositionFloor();
+      case PAYLOAD_POSITION_LENGTH_UNINITIALIZED:
+        getPositionLength(false);
+        return lookaheadNextStartPositionFloor;
+    }
+  }
+
   @Override
   public int nextStartPosition() throws IOException {
+    int predict = -1;
+    if (position >= 0) {
+      assert (predict = lookaheadNextStartPositionFloor()) > UNINITIALIZED_AT_DOC;
+    }
     if (count == freq) {
       assert position != NO_MORE_POSITIONS;
       return position = NO_MORE_POSITIONS;
@@ -91,6 +173,18 @@ public class TermSpans extends Spans {
     assert position != NO_MORE_POSITIONS; // int endPosition not possible
     count++;
     readPayload = false;
+    switch (positionLength) {
+      case NO_PAYLOAD_POSITION_LENGTH:
+      case FIELD_POSITION_LENGTH_UNINITIALIZED:
+        break;
+      default:
+        positionLength = PAYLOAD_POSITION_LENGTH_UNINITIALIZED;
+    }
+    if (count == 1) {
+      // this is the first position for this term in this doc, initialize maxPositionLength
+      getPositionLength(true);
+    }
+    assert predict < 0 || predict == position : predict + " != "+position;
     return position;
   }
 
@@ -99,10 +193,76 @@ public class TermSpans extends Spans {
     return position;
   }
 
+  int getPositionLength(boolean initMaxPositionLength) {
+    final boolean validateMagicNumber;
+    switch (positionLength) {
+      case NO_PAYLOAD_POSITION_LENGTH:
+        return 1;
+      default:
+        return positionLength;
+      case FIELD_POSITION_LENGTH_UNINITIALIZED:
+        validateMagicNumber = true;
+        break;
+      case PAYLOAD_POSITION_LENGTH_UNINITIALIZED:
+        validateMagicNumber = false;
+        break;
+    }
+    BytesRef payload;
+    try {
+      payload = postings.getPayload();
+    } catch (IOException ex) {
+      positionLength = NO_PAYLOAD_POSITION_LENGTH;
+      return 1;
+    }
+    int length;
+    if (payload == null || (length = payload.length) < MAGIC_NUMBER.length) {
+      positionLength = NO_PAYLOAD_POSITION_LENGTH;
+      return 1;
+    }
+    byte[] bytes = payload.bytes;
+    int offset = payload.offset;
+    if (validateMagicNumber) {
+      for (int i = 0; i < MAGIC_STABLE_LENGTH; i++) {
+        if (MAGIC_NUMBER[i] != bytes[offset + i]) {
+          positionLength = NO_PAYLOAD_POSITION_LENGTH;
+          return 1;
+        }
+      }
+      switch (bytes[offset + MAGIC_STABLE_LENGTH]) {
+        case ENCODE_LOOKAHEAD:
+          encodedLookahead = true;
+          break;
+        case NO_ENCODE_LOOKAHEAD:
+          encodedLookahead = false;
+          lookaheadNextStartPositionFloor = UNKNOWN_AT_SPANS;
+          maxPositionLength = UNKNOWN_AT_SPANS;
+          break;
+        default:
+          positionLength = NO_PAYLOAD_POSITION_LENGTH;
+          return 1;
+      }
+    }
+    if (length == MAGIC_NUMBER.length) {
+      return positionLength = 1;
+    } else {
+      positionLengthReader.reset(bytes, offset + MAGIC_NUMBER.length, length - MAGIC_NUMBER.length);
+      positionLength = positionLengthReader.readVInt();
+      if (encodedLookahead) {
+        lookaheadNextStartPositionFloor = position + positionLengthReader.readVInt();
+        if (initMaxPositionLength) {
+          maxPositionLength = positionLengthReader.eof() ? 1 : positionLengthReader.readInt();
+        } else {
+          assert positionLengthReader.eof();
+        }
+      }
+      return positionLength;
+    }
+  }
+
   @Override
   public int endPosition() {
     return (position == -1) ? -1
-          : (position != NO_MORE_POSITIONS) ? position + 1
+          : (position != NO_MORE_POSITIONS) ? position + getPositionLength(false)
           : NO_MORE_POSITIONS;
   }
 

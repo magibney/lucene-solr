@@ -33,6 +33,7 @@ import org.apache.lucene.index.TermState;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.util.FixedBitSet;
 
 /** Matches spans containing a term.
  * This should not be used for terms that are indexed at position Integer.MAX_VALUE.
@@ -65,6 +66,10 @@ public class SpanTermQuery extends SpanQuery {
 
   @Override
   public SpanWeight createWeight(IndexSearcher searcher, boolean needsScores, float boost) throws IOException {
+    return createWeight(searcher, needsScores, boost, null);
+  }
+
+  public SpanWeight createWeight(IndexSearcher searcher, boolean needsScores, float boost, TermsEnum[] sharedTermsEnum) throws IOException {
     final TermContext context;
     final IndexReaderContext topContext = searcher.getTopReaderContext();
     if (termContext == null || termContext.wasBuiltFor(topContext) == false) {
@@ -79,11 +84,19 @@ public class SpanTermQuery extends SpanQuery {
   public class SpanTermWeight extends SpanWeight {
 
     final TermContext termContext;
+    final TermsEnum[] sharedTermsEnum;
+    final FixedBitSet releasedShared; // only use with the first spans released for a given segment ord
 
     public SpanTermWeight(TermContext termContext, IndexSearcher searcher, Map<Term, TermContext> terms, float boost) throws IOException {
+      this(termContext, searcher, terms, boost, null);
+    }
+
+    public SpanTermWeight(TermContext termContext, IndexSearcher searcher, Map<Term, TermContext> terms, float boost, TermsEnum[] sharedTermsEnum) throws IOException {
       super(SpanTermQuery.this, searcher, terms, boost);
       this.termContext = termContext;
       assert termContext != null : "TermContext must not be null";
+      this.sharedTermsEnum = sharedTermsEnum;
+      this.releasedShared = sharedTermsEnum == null ? null : new FixedBitSet(sharedTermsEnum.length);
     }
 
     @Override
@@ -111,19 +124,28 @@ public class SpanTermQuery extends SpanQuery {
         assert context.reader().docFreq(term) == 0 : "no termstate found but term exists in reader term=" + term;
         return null;
       }
+      final TermsEnum termsEnum;
+      final int ord = context.ord;
+      if (sharedTermsEnum != null && releasedShared.getAndSet(ord)) {
+        termsEnum = sharedTermsEnum[ord];
+        if (termsEnum == null) {
+          return null;
+        }
+      } else {
+        final Terms terms = context.reader().terms(term.field());
+        if (terms == null)
+          return null;
+        if (terms.hasPositions() == false)
+          throw new IllegalStateException("field \"" + term.field() + "\" was indexed without position data; cannot run SpanTermQuery (term=" + term.text() + ")");
 
-      final Terms terms = context.reader().terms(term.field());
-      if (terms == null)
-        return null;
-      if (terms.hasPositions() == false)
-        throw new IllegalStateException("field \"" + term.field() + "\" was indexed without position data; cannot run SpanTermQuery (term=" + term.text() + ")");
-
-      final TermsEnum termsEnum = terms.iterator();
+        termsEnum = terms.iterator();
+      }
       termsEnum.seekExact(term.bytes(), state);
 
-      final PostingsEnum postings = termsEnum.postings(null, requiredPostings.getRequiredPostings());
+      final int postingsFlags = requiredPostings.getRequiredPostings() | PostingsEnum.PAYLOADS;
+      final PostingsEnum postings = termsEnum.postings(null, postingsFlags);
       float positionsCost = termPositionsCost(termsEnum) * PHRASE_TO_SPAN_TERM_POSITIONS_COST;
-      return new TermSpans(getSimScorer(context), postings, term, positionsCost);
+      return new TermSpans(getSimScorer(context), postings, term, positionsCost, postingsFlags);
     }
   }
 
