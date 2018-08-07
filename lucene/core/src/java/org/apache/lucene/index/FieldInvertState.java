@@ -20,9 +20,11 @@ import org.apache.lucene.analysis.TokenStream; // javadocs
 import org.apache.lucene.analysis.tokenattributes.OffsetAttribute;
 import org.apache.lucene.analysis.tokenattributes.PayloadAttribute;
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
+import org.apache.lucene.analysis.tokenattributes.PositionLengthAttribute;
 import org.apache.lucene.analysis.tokenattributes.TermFrequencyAttribute;
 import org.apache.lucene.analysis.tokenattributes.TermToBytesRefAttribute;
 import org.apache.lucene.util.AttributeSource;
+import org.apache.lucene.util.BytesRef;
 
 /**
  * This class tracks the number and position / offset parameters of terms
@@ -38,6 +40,9 @@ public final class FieldInvertState {
   int length;
   int numOverlap;
   int offset;
+  boolean allocatePositionLength;
+  final BytesRef firstMaxPositionLengthSlice = new BytesRef();
+  final BytesRef secondMaxPositionLengthSlice = new BytesRef();
   int maxTermFrequency;
   int uniqueTermCount;
   // we must track these across field instances (multi-valued case)
@@ -50,6 +55,7 @@ public final class FieldInvertState {
   PayloadAttribute payloadAttribute;
   TermToBytesRefAttribute termAttribute;
   TermFrequencyAttribute termFreqAttribute;
+  PositionLengthAttribute positionLengthAttribute;
 
   /** Creates {code FieldInvertState} for the specified
    *  field name. */
@@ -76,6 +82,9 @@ public final class FieldInvertState {
     length = 0;
     numOverlap = 0;
     offset = 0;
+    allocatePositionLength = false;
+    firstMaxPositionLengthSlice.length = 0;
+    secondMaxPositionLengthSlice.length = 0;
     maxTermFrequency = 0;
     uniqueTermCount = 0;
     lastStartOffset = 0;
@@ -94,6 +103,7 @@ public final class FieldInvertState {
       posIncrAttribute = attributeSource.addAttribute(PositionIncrementAttribute.class);
       offsetAttribute = attributeSource.addAttribute(OffsetAttribute.class);
       payloadAttribute = attributeSource.getAttribute(PayloadAttribute.class);
+      positionLengthAttribute = attributeSource.getAttribute(PositionLengthAttribute.class);
     }
   }
 

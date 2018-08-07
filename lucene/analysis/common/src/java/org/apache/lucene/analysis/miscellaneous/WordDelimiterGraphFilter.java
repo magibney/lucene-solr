@@ -362,12 +362,12 @@ public final class WordDelimiterGraphFilter extends TokenFilter {
           accumPosInc = 0;
           return true;
         }
-        
         // word of simply delimiters: swallow this token, creating a hole, and move on to next token
         if (iterator.end == WordDelimiterIterator.DONE) {
           if (has(PRESERVE_ORIGINAL) == false) {
             continue;
           } else {
+            posIncAttribute.setPositionIncrement(accumPosInc);
             accumPosInc = 0;
             return true;
           }
