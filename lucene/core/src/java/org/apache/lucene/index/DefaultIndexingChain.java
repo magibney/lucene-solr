@@ -397,6 +397,7 @@ final class DefaultIndexingChain extends DocConsumer {
       if (docWriter.hasHitAbortingException() == false) {
         // Finish each indexed field name seen in the document:
         for (int i=0;i<fieldCount;i++) {
+          fields[i].termsHashPerField.flush();
           fields[i].finish();
         }
         finishStoredFields();

@@ -25,6 +25,7 @@
 
   <dependencies>
     <dependency org="junit" name="junit" rev="${/junit/junit}" conf="compile"/>
+    <dependency org="com.carrotsearch" name="hppc" rev="${/com.carrotsearch/hppc}" conf="compile"/>
     <dependency org="com.carrotsearch.randomizedtesting" name="randomizedtesting-runner" rev="${/com.carrotsearch.randomizedtesting/randomizedtesting-runner}" conf="compile"/>
 
     <exclude org="*" ext="*" matcher="regexp" type="${ivy.exclude.types}"/> 
