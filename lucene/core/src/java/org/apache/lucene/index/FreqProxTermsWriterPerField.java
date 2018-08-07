@@ -82,8 +82,13 @@ final class FreqProxTermsWriterPerField extends TermsHashPerField {
       BytesRef payload = payloadAttribute.getPayload();
       if (payload != null && payload.length > 0) {
         writeVInt(1, (proxCode<<1)|1);
-        writeVInt(1, payload.length);
+        final boolean allocateSpace = fieldState.allocatePositionLength;
+        int finalPayloadLength = allocateSpace ? payload.length + Integer.BYTES : payload.length;
+        writeVInt(1, finalPayloadLength);
         writeBytes(1, payload.bytes, payload.offset, payload.length);
+        if (allocateSpace) {
+          allocateMaxPositionLengthPlaceholder(1);
+        }
         sawPayloads = true;
       } else {
         writeVInt(1, proxCode<<1);
