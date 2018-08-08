@@ -217,7 +217,7 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
   public static final boolean DEFAULT_ALLOW_OVERLAP = true;
   public static final boolean DEFAULT_COMBINE_REPEAT_SPANS = true;
   public static final boolean DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH = false;
-  public static final boolean DEFAULT_LEGACY_IMPLEMENTAION = false;
+  public static final boolean DEFAULT_LEGACY_IMPLEMENTATION = false;
 
   private static final String IMPOSSIBLE_FIELD_NAME = "\uFFFC\uFFFC\uFFFC\uFFFC"; // slightly different from edismax I_F_N
   protected final String field;
@@ -277,26 +277,26 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
 
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode, int comboThreshold, boolean allowOverlap,
       boolean combineRepeatSpans, boolean supportVariableTermSpansLength, String shingleFieldSuffix, Set<BytesRef> shingles) {
-    this(clausesIn, slop, inOrder, comboMode, comboThreshold, allowOverlap, combineRepeatSpans, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, shingleFieldSuffix, shingles, DEFAULT_LEGACY_IMPLEMENTAION);
+    this(clausesIn, slop, inOrder, comboMode, comboThreshold, allowOverlap, combineRepeatSpans, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, shingleFieldSuffix, shingles, DEFAULT_LEGACY_IMPLEMENTATION);
   }
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode, int comboThreshold, boolean allowOverlap, boolean combineRepeatSpans) {
-    this(clausesIn, slop, inOrder, comboMode, comboThreshold, allowOverlap, combineRepeatSpans, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTAION);
+    this(clausesIn, slop, inOrder, comboMode, comboThreshold, allowOverlap, combineRepeatSpans, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTATION);
   }
 
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode, int comboThreshold, boolean allowOverlap) {
-    this(clausesIn, slop, inOrder, comboMode, comboThreshold, allowOverlap, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTAION);
+    this(clausesIn, slop, inOrder, comboMode, comboThreshold, allowOverlap, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTATION);
   }
 
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode, int comboThreshold) {
-    this(clausesIn, slop, inOrder, comboMode, comboThreshold, DEFAULT_ALLOW_OVERLAP, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTAION);
+    this(clausesIn, slop, inOrder, comboMode, comboThreshold, DEFAULT_ALLOW_OVERLAP, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTATION);
   }
 
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode) {
-    this(clausesIn, slop, inOrder, comboMode, DEFAULT_COMBO_THRESHOLD, DEFAULT_ALLOW_OVERLAP, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTAION);
+    this(clausesIn, slop, inOrder, comboMode, DEFAULT_COMBO_THRESHOLD, DEFAULT_ALLOW_OVERLAP, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTATION);
   }
 
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder) {
-    this(clausesIn, slop, inOrder, DEFAULT_COMBO_MODE, DEFAULT_COMBO_THRESHOLD, DEFAULT_ALLOW_OVERLAP, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTAION);
+    this(clausesIn, slop, inOrder, DEFAULT_COMBO_MODE, DEFAULT_COMBO_THRESHOLD, DEFAULT_ALLOW_OVERLAP, DEFAULT_COMBINE_REPEAT_SPANS, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTATION);
   }
 
   /** Return the clauses whose spans are matched. */
@@ -431,38 +431,6 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
         return new NearSpansUnordered(slop, subSpans);
       } else {
         maxSpanCountPerOrd = Math.max(maxSpanCountPerOrd, ++ordSpanCounts[context.ord]);
-        final ArrayList<TermSpansRepeatBuffer> reuse;
-        final ArrayList<PositionDeque> reuseDeque;
-        final Iterator<TermSpansRepeatBuffer> reuseIter;
-        final Iterator<PositionDeque> reuseDequeIter;
-        assignReuse:
-        {
-          if (!reuseQueue.isEmpty()) {
-            Iterator<ReuseStruct> iter = reuseQueue.iterator();
-            do {
-              ReuseStruct next = iter.next();
-              final int size;
-              final ArrayList<PositionDeque> toReuse = next.reuseDeque;
-              if (!toReuse.get(toReuse.size() - 1).isActive()) { // check at phraseIndex=0
-                iter.remove();
-                final List<TermSpansRepeatBuffer> tsrb = next.reuseTSRB;
-                reuseIter = tsrb.iterator();
-                reuse = new ArrayList<>(tsrb.size());
-                reuseDequeIter = toReuse.iterator();
-                reuseDeque = new ArrayList<>(toReuse.size());
-                break assignReuse;
-              } else if ((size = reuseQueue.size()) > SUPPORT_PARALLEL_REUSE_LIMIT || size > maxSpanCountPerOrd) {
-                // if spans are not consumed, prevent reuse queue from growing out of control
-                iter.remove();
-              }
-            } while (iter.hasNext());
-          }
-          reuseIter = null;
-          reuse = new ArrayList<>(subSpans.size());
-          reuseDequeIter = null;
-          reuseDeque = new ArrayList<>(subSpans.size());
-        }
-        reuseQueue.add(new ReuseStruct(reuse, reuseDeque));
 
         final Terms shingleTerms;
         final List<Spans> shinglesSpans;
@@ -491,6 +459,38 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
         if (legacy) {
           return new LegacyNearSpansOrdered(slop, subSpans, shinglesSpans);
         } else {
+          final ArrayList<TermSpansRepeatBuffer> reuse;
+          final ArrayList<PositionDeque> reuseDeque;
+          final Iterator<TermSpansRepeatBuffer> reuseIter;
+          final Iterator<PositionDeque> reuseDequeIter;
+          assignReuse:
+          {
+            if (!reuseQueue.isEmpty()) {
+              Iterator<ReuseStruct> iter = reuseQueue.iterator();
+              do {
+                ReuseStruct next = iter.next();
+                final int size;
+                final ArrayList<PositionDeque> toReuse = next.reuseDeque;
+                if (!toReuse.get(toReuse.size() - 1).isActive()) { // check at phraseIndex=0
+                  iter.remove();
+                  final List<TermSpansRepeatBuffer> tsrb = next.reuseTSRB;
+                  reuseIter = tsrb.iterator();
+                  reuse = new ArrayList<>(tsrb.size());
+                  reuseDequeIter = toReuse.iterator();
+                  reuseDeque = new ArrayList<>(toReuse.size());
+                  break assignReuse;
+                } else if ((size = reuseQueue.size()) > SUPPORT_PARALLEL_REUSE_LIMIT || size > maxSpanCountPerOrd) {
+                  // if spans are not consumed, prevent reuse queue from growing out of control
+                  iter.remove();
+                }
+              } while (iter.hasNext());
+            }
+            reuseIter = null;
+            reuse = new ArrayList<>(subSpans.size());
+            reuseDequeIter = null;
+            reuseDeque = new ArrayList<>(subSpans.size());
+          }
+          reuseQueue.add(new ReuseStruct(reuse, reuseDeque));
           return new NearSpansOrdered(slop, subSpans, weightComboMode, comboThreshold, allowOverlap,
               combineRepeatSpans, reuseIter, reuse, (requiredPostings.getRequiredPostings() & PostingsEnum.OFFSETS) != 0,
               supportVariableTermSpansLength, reuseDequeIter, reuseDeque, shinglesSpans);
