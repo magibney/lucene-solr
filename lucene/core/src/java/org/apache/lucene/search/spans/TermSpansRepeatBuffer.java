@@ -151,7 +151,7 @@ public class TermSpansRepeatBuffer {
     if (payloads) {
       i = buffers.length;
       oldBuffer = payloadBuffer;
-      newBuffer = new BytesRef[capacity];
+      newBuffer = payloadBuffer = new BytesRef[capacity];
     } else {
       i = buffers.length - 1;
       oldBuffer = buffers[i];

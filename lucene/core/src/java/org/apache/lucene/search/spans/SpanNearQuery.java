@@ -432,38 +432,6 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
         return new NearSpansUnordered(slop, subSpans);
       } else {
         maxSpanCountPerOrd = Math.max(maxSpanCountPerOrd, ++ordSpanCounts[context.ord]);
-        final ArrayList<TermSpansRepeatBuffer> reuse;
-        final ArrayList<PositionDeque> reuseDeque;
-        final Iterator<TermSpansRepeatBuffer> reuseIter;
-        final Iterator<PositionDeque> reuseDequeIter;
-        assignReuse:
-        {
-          if (!reuseQueue.isEmpty()) {
-            Iterator<ReuseStruct> iter = reuseQueue.iterator();
-            do {
-              ReuseStruct next = iter.next();
-              final int size;
-              final ArrayList<PositionDeque> toReuse = next.reuseDeque;
-              if (!toReuse.get(toReuse.size() - 1).isActive()) { // check at phraseIndex=0
-                iter.remove();
-                final List<TermSpansRepeatBuffer> tsrb = next.reuseTSRB;
-                reuseIter = tsrb.iterator();
-                reuse = new ArrayList<>(tsrb.size());
-                reuseDequeIter = toReuse.iterator();
-                reuseDeque = new ArrayList<>(toReuse.size());
-                break assignReuse;
-              } else if ((size = reuseQueue.size()) > SUPPORT_PARALLEL_REUSE_LIMIT || size > maxSpanCountPerOrd) {
-                // if spans are not consumed, prevent reuse queue from growing out of control
-                iter.remove();
-              }
-            } while (iter.hasNext());
-          }
-          reuseIter = null;
-          reuse = new ArrayList<>(subSpans.size());
-          reuseDequeIter = null;
-          reuseDeque = new ArrayList<>(subSpans.size());
-        }
-        reuseQueue.add(new ReuseStruct(reuse, reuseDeque));
 
         final Terms shingleTerms;
         final List<Spans> shinglesSpans;
@@ -492,6 +460,38 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
         if (legacy) {
           return new LegacyNearSpansOrdered(slop, subSpans, shinglesSpans);
         } else {
+          final ArrayList<TermSpansRepeatBuffer> reuse;
+          final ArrayList<PositionDeque> reuseDeque;
+          final Iterator<TermSpansRepeatBuffer> reuseIter;
+          final Iterator<PositionDeque> reuseDequeIter;
+          assignReuse:
+          {
+            if (!reuseQueue.isEmpty()) {
+              Iterator<ReuseStruct> iter = reuseQueue.iterator();
+              do {
+                ReuseStruct next = iter.next();
+                final int size;
+                final ArrayList<PositionDeque> toReuse = next.reuseDeque;
+                if (!toReuse.get(toReuse.size() - 1).isActive()) { // check at phraseIndex=0
+                  iter.remove();
+                  final List<TermSpansRepeatBuffer> tsrb = next.reuseTSRB;
+                  reuseIter = tsrb.iterator();
+                  reuse = new ArrayList<>(tsrb.size());
+                  reuseDequeIter = toReuse.iterator();
+                  reuseDeque = new ArrayList<>(toReuse.size());
+                  break assignReuse;
+                } else if ((size = reuseQueue.size()) > SUPPORT_PARALLEL_REUSE_LIMIT || size > maxSpanCountPerOrd) {
+                  // if spans are not consumed, prevent reuse queue from growing out of control
+                  iter.remove();
+                }
+              } while (iter.hasNext());
+            }
+            reuseIter = null;
+            reuse = new ArrayList<>(subSpans.size());
+            reuseDequeIter = null;
+            reuseDeque = new ArrayList<>(subSpans.size());
+          }
+          reuseQueue.add(new ReuseStruct(reuse, reuseDeque));
           return new NearSpansOrdered(slop, subSpans, weightComboMode, comboThreshold, allowOverlap,
               combineRepeatSpans, reuseIter, reuse, (requiredPostings.getRequiredPostings() & PostingsEnum.OFFSETS) != 0,
               supportVariableTermSpansLength, reuseDequeIter, reuseDeque, shinglesSpans);
