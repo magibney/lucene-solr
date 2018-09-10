@@ -54,7 +54,10 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
   private static final int DEFAULT_MAX_CLAUSES = Integer.MAX_VALUE; //1000?
   private static final int DEFAULT_MAX_SUPPORTED_SLOP = Integer.MAX_VALUE; //100?
   private static final boolean DEFAULT_USE_LEGACY_IMPLEMENTATION = false;
+  private static final boolean DEFAULT_USE_LOOP_IMPLEMENTATION = true;
+  private static final boolean DEFAULT_MAKE_OUTER_GREEDY = false;
   private boolean useLegacyImplementation;
+  private boolean useLoopImplementation;
   private boolean initializedFieldDensities;
   private NamedList<Integer> denseFields;
   private int maxDenseClauses;
@@ -63,6 +66,7 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
   private ShingleWords shingleWords;
   private boolean combineRepeatSpans;
   private ComboMode comboMode;
+  private boolean makeOuterGreedy;
   private boolean allowOverlap;
   private int denseClauseNoOverlapThreshold;
   private int comboThreshold;
@@ -98,6 +102,8 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
       this.shingleWords = null;
     }
     useLegacyImplementation = (tmpBool = args.removeBooleanArg("useLegacyImplementation")) == null ? DEFAULT_USE_LEGACY_IMPLEMENTATION : tmpBool;
+    useLoopImplementation = (tmpBool = args.removeBooleanArg("useLoopImplementation")) == null ? DEFAULT_USE_LOOP_IMPLEMENTATION : tmpBool;
+    makeOuterGreedy = (tmpBool = args.removeBooleanArg("makeOuterGreedy")) == null ? DEFAULT_MAKE_OUTER_GREEDY : tmpBool;
   }
 
   @Override
@@ -230,17 +236,17 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
     return (density * docCount) / ((maxDoc + 1000) / 1000);
   }
 
-  private SpanOrQuery filter(SpanOrQuery q) throws SyntaxError {
+  private SpanOrQuery filter(SpanOrQuery q, int depth) throws SyntaxError {
     final SpanQuery[] clauses = q.getClauses();
     boolean modified = false;
     for (int i = clauses.length - 1; i >= 0; i--) {
       final SpanQuery subQ = clauses[i];
       final SpanQuery newSubQ;
       if (subQ instanceof SpanOrQuery) {
-        newSubQ = filter((SpanOrQuery)subQ);
+        newSubQ = filter((SpanOrQuery)subQ, depth + 1);
       } else if (subQ instanceof SpanNearQuery) {
         SpanNearQuery snq = (SpanNearQuery) subQ;
-        newSubQ = filter(snq, snq.getSlop(), 0);
+        newSubQ = filter(snq, snq.getSlop(), 0, depth + 1);
       } else {
         continue;
       }
@@ -257,6 +263,10 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
   private static final byte NULL_BYTE = (byte)0;
   @Override
   public SpanQuery filter(SpanNearQuery snq, int slop, int minClauseSize) throws SyntaxError {
+    return filter(snq, slop, minClauseSize, 0);
+  }
+
+  public SpanQuery filter(SpanNearQuery snq, int slop, int minClauseSize, int depth) throws SyntaxError {
     SpanQuery[] clauses = snq.getClauses();
     if (minClauseSize > 1 && clauses.length < minClauseSize) {
       return null;
@@ -275,8 +285,9 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
       } else {
         final boolean explicitPhraseQuery = minClauseSize == 0; // we might want to do something based on this.
         final String field = snq.getField();
+        final ComboMode effectiveComboMode = makeOuterGreedy && depth == 0 ? ComboMode.GREEDY_END_POSITION : comboMode;
         final Map<BytesRef, DensityEntry> densityEntry = densityLookup == null ? null : densityLookup.get(field);
-        SpanNearQuery.Builder builder = new SpanNearQuery.Builder(field, snq.isInOrder(), comboMode,
+        SpanNearQuery.Builder builder = new SpanNearQuery.Builder(field, snq.isInOrder(), effectiveComboMode,
             SpanNearQuery.DEFAULT_COMBO_THRESHOLD, allowOverlap, combineRepeatSpans, supportVariableTermSpansLength);
         final BytesRefBuilder brb = new BytesRefBuilder();
         int denseTermCount = 0;
@@ -319,12 +330,12 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
             }
           } else if (sq instanceof SpanNearQuery) {
             SpanNearQuery subSnq = (SpanNearQuery) sq;
-            sq = filter(subSnq, subSnq.getSlop(), 0);
+            sq = filter(subSnq, subSnq.getSlop(), 0, depth + 1);
             if (sq == null) {
               return null;
             }
           } else if (sq instanceof SpanOrQuery) {
-            sq = filter((SpanOrQuery)sq);
+            sq = filter((SpanOrQuery)sq, depth + 1);
             if (sq == null) {
               return null;
             }
@@ -346,6 +357,7 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
         }
         builder.setSlop(slop);
         builder.setLegacyImplementation(useLegacyImplementation);
+        builder.setLoopImplementation(useLoopImplementation);
         if (shingles != null) {
           builder.setShingles(shingleFieldSuffix, shingles);
         }
