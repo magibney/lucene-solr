@@ -3,9 +3,15 @@ Lucene Change Log
 For more information on past and future Lucene versions, please see:
 http://s.apache.org/luceneversions
 
+======================= Lucene 7.6.0 =======================
+(No Changes)
+
 ======================= Lucene 7.5.0 =======================
 
 API Changes:
+
+* LUCENE-8467: RAMDirectory, RAMFile, RAMInputStream, RAMOutputStream are deprecated
+  (Dawid Weiss)
 
 * LUCENE-8356: StandardFilter is deprecated (Alan Woodward)
 
@@ -45,7 +51,30 @@ API Changes:
 * LUCENE-8437: CheckIndex.Status.cantOpenSegments and missingSegmentVersion
   have been removed as they were not computed correctly. (Adrien Grand)
 
+* LUCENE-8286: The UnifiedHighlighter has a new HighlightFlag.WEIGHT_MATCHES flag that
+  will tell this highlighter to use the new MatchesIterator API as the underlying
+  approach to navigate matching hits for a query.  This mode will highlight more
+  accurately than any other highlighter, and can mark up phrases as one span instead of
+  word-by-word.  The UH's public internal APIs changed a bit in the process.
+  (David Smiley)
+
+* LUCENE-8471: IndexWriter.getFlushingBytes() returns how many bytes are currently
+  being flushed to disk. (Alan Woodward)
+
+* LUCENE-8422: Static helper functions for Matches and MatchesIterator implementations
+  have been moved from Matches to MatchesUtils (Alan Woodward)
+
+* LUCENE-8459: SearcherTaxonomyManager now has a constructor taking already opened
+  IndexReaders, allowing the caller to pass a FilterDirectoryReader, for example.
+  (Mike McCandless)
+
 Bug Fixes:
+
+* LUCENE-8445: Tighten condition when two planes are identical to prevent constructing
+  bogus tiles when building GeoPolygons. (Ignacio Vera)
+
+* LUCENE-8444: Prevent building functionally identical plane bounds when constructing
+  DualCrossingEdgeIterator . (Ignacio Vera)
 
 * LUCENE-8380: UTF8TaxonomyWriterCache inconsistency. (Ruslan Torobaev, Dawid Weiss)
 
@@ -73,6 +102,12 @@ Bug Fixes:
 * LUCENE-8441: IndexWriter now checks doc value type for index sort fields
   and fails the document if they are not compatible. (Jim Ferenczi, Mike McCandless)
 
+* LUCENE-8458: Adjust initialization condition of PendingSoftDeletes and ensures
+  it is initialized before accepting deletes (Simon Willnauer, Nhat Nguyen)
+
+* LUCENE-8466: IndexWriter.deleteDocs(Query... query) incorrectly applies deletes on flush
+  if the index is sorted. (Adrien Grand, Jim Ferenczi, Vish Ramachandran)
+
 Changes in Runtime Behavior:
 
 * LUCENE-7976: TieredMergePolicy now respects maxSegmentSizeMB by default when executing
@@ -83,6 +118,10 @@ Changes in Runtime Behavior:
   used by deleted documents. (Adrien Grand)
 
 Improvements
+
+* LUCENE-8468: A ByteBuffer based Directory implementation. (Dawid Weiss)
+
+* LUCENE-8447: Add DISJOINT and WITHIN support to LatLonShape queries. (Nick Knize)
 
 * LUCENE-8440: Add support for indexing and searching Line and Point shapes using LatLonShape encoding (Nick Knize)
 
@@ -100,7 +139,30 @@ Improvements
 
 * LUCENE-8414: Make segmentInfos private in IndexWriter (Simon Willnauer, Nhat Nguyen)
 
+* LUCENE-8446: The UnifiedHighlighter's DefaultPassageFormatter now treats overlapping matches in
+  the passage as merged (as if one larger match).  (David Smiley)
+
+* LUCENE-8460: Better argument validation in StoredField. (Namgyu Kim)
+
+* LUCENE-8432: TopFieldComparator stops comparing documents if the index is
+  sorted, even if hits still need to be visited to compute the hit count.
+  (Nikolay Khitrin)
+
+* LUCENE-8422: IntervalQuery now returns useful Matches (Alan Woodward)
+
+* LUCENE-7862: Store the real bounds of the leaf cells in the BKD index when the
+   number of dimensions is bigger than 1. It improves performance when there is
+   correlation between the dimensions, for example ranges. (Ignacio Vera, Adrien Grand)
+
+Build
+
+* LUCENE-5143: Stop publishing KEYS file with each version, use topmost lucene/KEYS file only. 
+  The buildAndPushRelease.py script validates that RM's PGP key is in the KEYS file.
+  Remove unused 'copy-to-stage' and '-dist-keys' targets from ant build. (janhoy)
+
 Other:
+
+* LUCENE-8485: Update randomizedtesting to version 2.6.4. (Dawid Weiss)
 
 * LUCENE-8366: Upgrade to ICU 62.1. Emoji handling now uses Unicode 11's
   Extended_Pictographic property. (Robert Muir)
@@ -110,6 +172,18 @@ Other:
 
 * LUCENE-8420: Upgrade OpenNLP to 1.9.0 so OpenNLP tool can read the new model format which 1.8.x
   cannot read. 1.9.0 can read the old format. (Koji Sekiguchi)
+
+* LUCENE-8453: Add documentation to analysis factories of Korean (Nori) analyzer
+  module.  (Tomoko Uchida via Uwe Schindler)
+
+* LUCENE-8455: Upgrade ECJ compiler to 4.6.1 in lucene/common-build.xml (Erick Erickson)
+
+* LUCENE-8456: Upgrade Apache Commons Compress to v1.18 (Steve Rowe)
+
+* LUCENE-765: Improved org.apache.lucene.index javadocs. (Mike Sokolov)
+
+* LUCENE-8476: Remove redundant nullity check and switch to optimized List.sort in the
+  Korean's user dictionary. (Namgyu Kim)
 
 ======================= Lucene 7.4.1 =======================
 
@@ -124,6 +198,8 @@ Bug Fixes:
 
  * LUCENE-8384: Fix missing advance docValues generation while handling docValues
    update in PendingSoftDeletes. (Simon Willnauer, Nhat Nguyen)
+
+ * LUCENE-8472: Always rewrite the soft-deletes merge retention query. (Adrien Grand, Nhat Nguyen)
 
 ======================= Lucene 7.4.0 =======================
 

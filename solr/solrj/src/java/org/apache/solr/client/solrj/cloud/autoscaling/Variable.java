@@ -22,13 +22,16 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 
 import org.apache.solr.common.cloud.rule.ImplicitSnitch;
 
 import static java.util.Collections.emptySet;
+import static java.util.Collections.unmodifiableMap;
 import static java.util.Collections.unmodifiableSet;
 
 /**
@@ -42,6 +45,7 @@ public interface Variable {
   default boolean match(Object inputVal, Operand op, Object val, String name, Row row) {
     return op.match(val, validate(name, inputVal, false)) == Clause.TestStatus.PASS;
   }
+
   default Object convertVal(Object val) {
     return val;
   }
@@ -49,16 +53,13 @@ public interface Variable {
   default void projectAddReplica(Cell cell, ReplicaInfo ri, Consumer<Row.OperationInfo> opCollector, boolean strictMode) {
   }
 
-  default void addViolatingReplicas(Violation.Ctx ctx) {
-    for (Row row : ctx.allRows) {
-      if (ctx.clause.tag.varType.meta.isNodeSpecificVal() && !row.node.equals(ctx.tagKey)) continue;
-      Violation.collectViolatingReplicas(ctx, row);
-    }
+  default boolean addViolatingReplicas(Violation.Ctx ctx) {
+    return false;
   }
 
-  void getSuggestions(Suggestion.Ctx ctx) ;
+  void getSuggestions(Suggestion.Ctx ctx);
 
-  default Object computeValue(Policy.Session session, Clause.Condition condition, String collection, String shard, String node) {
+  default Object computeValue(Policy.Session session, Condition condition, String collection, String shard, String node) {
     return condition.val;
   }
 
@@ -67,11 +68,11 @@ public interface Variable {
   default void projectRemoveReplica(Cell cell, ReplicaInfo ri, Consumer<Row.OperationInfo> opCollector) {
   }
 
-  default String postValidate(Clause.Condition condition) {
+  default String postValidate(Condition condition) {
     return null;
   }
 
-  default Operand getOperand(Operand expected, Object strVal, Clause.ComputedType computedType) {
+  default Operand getOperand(Operand expected, Object strVal, ComputedType computedType) {
     return expected;
   }
 
@@ -81,7 +82,10 @@ public interface Variable {
    * Type details of each variable in policies
    */
   public enum Type implements Variable {
-    @Meta(name = "withCollection", type = String.class, isNodeSpecificVal = true, implementation = WithCollectionVariable.class)
+    @Meta(name = "withCollection",
+        type = String.class,
+        isNodeSpecificVal = true,
+        implementation = WithCollectionVariable.class)
     WITH_COLLECTION(),
 
     @Meta(name = "collection",
@@ -97,7 +101,7 @@ public interface Variable {
         type = Double.class,
         min = 0, max = -1,
         implementation = ReplicaVariable.class,
-        computedValues = {Clause.ComputedType.EQUAL, Clause.ComputedType.PERCENT, Clause.ComputedType.ALL})
+        computedValues = {ComputedType.EQUAL, ComputedType.PERCENT, ComputedType.ALL})
     REPLICA,
     @Meta(name = ImplicitSnitch.PORT,
         type = Long.class,
@@ -142,7 +146,7 @@ public interface Variable {
         associatedPerReplicaValue = Variable.coreidxsize,
         associatedPerNodeValue = "totaldisk",
         implementation = FreeDiskVariable.class,
-        computedValues = Clause.ComputedType.PERCENT)
+        computedValues = ComputedType.PERCENT)
     FREEDISK,
 
     @Meta(name = "totaldisk",
@@ -166,7 +170,7 @@ public interface Variable {
     @Meta(name = ImplicitSnitch.CORES,
         type = Double.class,
         min = 0, max = -1,
-        computedValues = Clause.ComputedType.EQUAL,
+        computedValues = {ComputedType.EQUAL, ComputedType.PERCENT},
         implementation = CoresVariable.class)
     CORES,
 
@@ -225,7 +229,7 @@ public interface Variable {
     public final String perReplicaValue;
     public final Set<String> associatedPerNodeValues;
     public final String metricsAttribute;
-    public final Set<Clause.ComputedType> supportedComputedTypes;
+    public final Set<ComputedType> supportedComputedTypes;
     final Variable impl;
 
 
@@ -238,7 +242,7 @@ public interface Variable {
       } catch (NoSuchFieldException e) {
         //cannot happen
       }
-      impl= VariableBase.loadImpl(meta, this);
+      impl = VariableBase.loadImpl(meta, this);
 
       this.tagName = meta.name();
       this.type = meta.type();
@@ -250,7 +254,7 @@ public interface Variable {
       this.associatedPerNodeValues = readSet(meta.associatedPerNodeValue());
       this.additive = meta.isAdditive();
       this.metricsAttribute = readStr(meta.metricsKey());
-      this.supportedComputedTypes = meta.computedValues()[0] == Clause.ComputedType.NULL ?
+      this.supportedComputedTypes = meta.computedValues()[0] == ComputedType.NULL ?
           emptySet() :
           unmodifiableSet(new HashSet(Arrays.asList(meta.computedValues())));
       this.wildCards = readSet(meta.wildCards());
@@ -281,11 +285,11 @@ public interface Variable {
     }
 
     @Override
-    public void addViolatingReplicas(Violation.Ctx ctx) {
-        impl.addViolatingReplicas(ctx);
+    public boolean addViolatingReplicas(Violation.Ctx ctx) {
+      return impl.addViolatingReplicas(ctx);
     }
 
-    public Operand getOperand(Operand expected, Object val, Clause.ComputedType computedType) {
+    public Operand getOperand(Operand expected, Object val, ComputedType computedType) {
       return impl.getOperand(expected, val, computedType);
     }
 
@@ -294,7 +298,7 @@ public interface Variable {
       return impl.convertVal(val);
     }
 
-    public String postValidate(Clause.Condition condition) {
+    public String postValidate(Condition condition) {
       return impl.postValidate(condition);
     }
 
@@ -319,13 +323,25 @@ public interface Variable {
     }
 
     @Override
-    public Object computeValue(Policy.Session session, Clause.Condition condition, String collection, String shard, String node) {
+    public Object computeValue(Policy.Session session, Condition condition, String collection, String shard, String node) {
       return impl.computeValue(session, condition, collection, shard, node);
     }
 
     @Override
     public boolean match(Object inputVal, Operand op, Object val, String name, Row row) {
       return impl.match(inputVal, op, val, name, row);
+    }
+
+    private static final Map<String, Type> typeByNameMap;
+    static {
+      HashMap<String, Type> m = new HashMap<>();
+      for (Type t : Type.values()) {
+        m.put(t.tagName, t);
+      }
+      typeByNameMap = unmodifiableMap(m);
+    }
+    static Type get(String name) {
+      return typeByNameMap.get(name);
     }
   }
 
@@ -360,6 +376,6 @@ public interface Variable {
 
     Class implementation() default void.class;
 
-    Clause.ComputedType[] computedValues() default Clause.ComputedType.NULL;
+    ComputedType[] computedValues() default ComputedType.NULL;
   }
 }

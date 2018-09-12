@@ -17,14 +17,15 @@
 
 package org.apache.solr.client.solrj.cloud.autoscaling;
 
-import java.util.HashMap;
-import java.util.Map;
+
+import java.util.ArrayList;
 
 import org.apache.solr.common.cloud.rule.ImplicitSnitch;
 import org.apache.solr.common.util.StrUtils;
 
 import static org.apache.solr.client.solrj.cloud.autoscaling.Clause.parseString;
-import static org.apache.solr.client.solrj.cloud.autoscaling.Suggestion.perNodeSuggestions;
+import static org.apache.solr.client.solrj.cloud.autoscaling.Suggestion.suggestNegativeViolations;
+import static org.apache.solr.client.solrj.cloud.autoscaling.Suggestion.suggestPositiveViolations;
 import static org.apache.solr.client.solrj.cloud.autoscaling.Variable.Type.FREEDISK;
 
 public class VariableBase implements Variable {
@@ -36,12 +37,17 @@ public class VariableBase implements Variable {
 
   @Override
   public void getSuggestions(Suggestion.Ctx ctx) {
-    perNodeSuggestions(ctx);
+    if (ctx.violation == null) return;
+    if (ctx.violation.replicaCountDelta > 0) {
+      suggestPositiveViolations(ctx);
+    } else {
+      suggestNegativeViolations(ctx, ArrayList::new);
+    }
   }
 
   static Object getOperandAdjustedValue(Object val, Object original) {
-    if (original instanceof Clause.Condition) {
-      Clause.Condition condition = (Clause.Condition) original;
+    if (original instanceof Condition) {
+      Condition condition = (Condition) original;
       if (condition.computedType == null && isIntegerEquivalent(val)) {
         if (condition.op == Operand.LESS_THAN) {
           //replica : '<3'
@@ -77,7 +83,7 @@ public class VariableBase implements Variable {
   }
 
   public static Type getTagType(String name) {
-    Type info = validatetypes.get(name);
+    Type info = Type.get(name);
     if (info == null && name.startsWith(ImplicitSnitch.SYSPROP)) info = Type.STRING;
     if (info == null && name.startsWith(Clause.METRICS_PREFIX)) info = Type.LAZY;
     return info;
@@ -102,11 +108,12 @@ public class VariableBase implements Variable {
 
   @Override
   public Object validate(String name, Object val, boolean isRuleVal) {
-    if (val instanceof Clause.Condition) {
-      Clause.Condition condition = (Clause.Condition) val;
+    if (val instanceof Condition) {
+      Condition condition = (Condition) val;
       val = condition.op.readRuleValue(condition);
       if (val != condition.val) return val;
     }
+    if (!isRuleVal && "".equals(val) && this.varType.type != String.class) val = -1;
     if (name == null) name = this.varType.tagName;
     if (varType.type == Double.class) {
       Double num = Clause.parseDouble(name, val);
@@ -178,7 +185,7 @@ public class VariableBase implements Variable {
 
     @Override
     public void getSuggestions(Suggestion.Ctx ctx) {
-      perNodeSuggestions(ctx);
+      suggestPositiveViolations(ctx);
     }
   }
 
@@ -189,17 +196,7 @@ public class VariableBase implements Variable {
 
     @Override
     public void getSuggestions(Suggestion.Ctx ctx) {
-      perNodeSuggestions(ctx);
+      suggestPositiveViolations(ctx);
     }
-
-
-  }
-
-  private static Map<String, Type> validatetypes;
-
-  static {
-    validatetypes = new HashMap<>();
-    for (Type t : Type.values())
-      validatetypes.put(t.tagName, t);
   }
 }
