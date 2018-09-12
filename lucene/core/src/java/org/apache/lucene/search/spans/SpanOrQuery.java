@@ -127,6 +127,7 @@ public final class SpanOrQuery extends SpanQuery {
 
     protected int lookaheadNextStartPositionFloor;
     protected int positionLengthCeiling;
+    protected int positionLengthFloor;
 
     public LookaheadSpans(boolean someImplementLookahead) {
       if (someImplementLookahead) {
@@ -257,6 +258,24 @@ public final class SpanOrQuery extends SpanQuery {
           return positionLengthCeiling;
         }
 
+        @Override
+        public int positionLengthFloor() {
+          return positionLengthFloor;
+        }
+
+        @Override
+        public int endPositionDecreaseCeiling() throws IOException {
+          final int lookahead = lookaheadNextStartPositionFloor();
+          final int theoreticalStart = lookahead < 0 ? startPosition() + 1 : lookahead;
+          final int endPosition = endPosition();
+          final int theoreticalEnd;
+          if (theoreticalStart >= endPosition || (theoreticalEnd = theoreticalStart + positionLengthFloor()) >= endPosition) {
+            return 0;
+          } else {
+            return endPosition - theoreticalEnd;
+          }
+        }
+
         Spans topPositionSpans = null;
 
         @Override
@@ -384,6 +403,7 @@ public final class SpanOrQuery extends SpanQuery {
             default:
               lookaheadNextStartPositionFloor = UNINITIALIZED_AT_DOC;
           }
+          positionLengthFloor = Integer.MAX_VALUE;
         }
 
         void fillPositionQueue() throws IOException { // called at first nextStartPosition
@@ -447,6 +467,16 @@ public final class SpanOrQuery extends SpanQuery {
             }
           } else if (lookaheadNextStartPositionFloor == UNINITIALIZED_AT_DOC && spansAtDoc instanceof IndexLookahead && mayHavePositionLookahead((IndexLookahead)spansAtDoc)) {
             lookaheadNextStartPositionFloor = UNINITIALIZED_AT_POSITION;
+          }
+          if (positionLengthFloor > 1) {
+            if (!(spansAtDoc instanceof IndexLookahead)) {
+              positionLengthFloor = 1;
+            } else {
+              final int candidatePositionLengthFloor = ((IndexLookahead)spansAtDoc).positionLengthFloor();
+              if (candidatePositionLengthFloor < positionLengthFloor) {
+                positionLengthFloor = candidatePositionLengthFloor;
+              }
+            }
           }
         }
 
