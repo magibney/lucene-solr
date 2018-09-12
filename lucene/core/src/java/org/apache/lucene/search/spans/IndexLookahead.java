@@ -21,7 +21,7 @@ import java.io.IOException;
 /**
  *
  */
-interface IndexLookahead {
+interface IndexLookahead extends MatchShrinkAware {
 
   static final int UNKNOWN_AT_POSITION = Integer.MIN_VALUE + 6;
   static final int UNKNOWN_AT_DOC = Integer.MIN_VALUE + 5;
@@ -73,5 +73,5 @@ interface IndexLookahead {
    * nextStartPosition() -- a case which requires special handling to reliably support complete combinatoric matching.
    * @return
    */
-  int positionLengthCeiling();
+  int positionLengthCeiling() throws IOException;
 }
