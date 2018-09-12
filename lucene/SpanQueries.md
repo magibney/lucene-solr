@@ -69,6 +69,12 @@ excessive GC that might accompany such a scale of object creation, `Node`s
 are pooled and reused per-`PositionDeque` (and thus, per phrase
 index); simple linking nodes are also pooled per-`PositionDeque`, and
 are returned to the pool upon release/reuse of their currently associated `Node`.
+On a moderate-sized production index, experience has shown that this object
+pooling approach leads to consistent performance. With object pooling disabled
+over the same index, hundreds of millions of objects were being created per
+request, and query response time was anywhere from 2x to 10x worse than with
+object pooling enabled. (The highly variable response time is in keeping with
+the intermittent nature of long GC-related pauses).
 
 ## New types of information in the Lucene index
 This development exposed new possiblities that make certain additional

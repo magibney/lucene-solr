@@ -29,6 +29,8 @@ import java.util.ListIterator;
 import java.util.Map;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.TwoPhaseIterator;
+import static org.apache.lucene.search.spans.PositionDeque.ENABLE_GREEDY_RETURN;
+import org.apache.lucene.search.spans.PositionDeque.PositionDequeIterator;
 import org.apache.lucene.search.spans.SpanNearQuery.ComboMode;
 import static org.apache.lucene.search.spans.Spans.NO_MORE_POSITIONS;
 import org.apache.lucene.search.spans.TermSpansRepeatBuffer.RepeatTermSpans;
@@ -110,7 +112,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
 
     @Override
     public int nextDoc() throws IOException {
-      toClear.stored.clear(true);
+      toClear.stored.clear(true, true);
       int ret = backing.nextDoc();
       toClear.clear(true, ret);
       return ret;
@@ -118,7 +120,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
 
     @Override
     public int advance(int target) throws IOException {
-      toClear.stored.clear(true);
+      toClear.stored.clear(true, true);
       int ret = backing.advance(target);
       toClear.clear(true, ret);
       return ret;
@@ -131,7 +133,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
 
   }
 
-  static final class RecordingPushbackSpans extends Spans {
+  static final class RecordingPushbackSpans extends Spans implements MatchShrinkAware {
 
     private static final boolean DEFAULT_OFFSETS = true;
     private final boolean offsets;
@@ -147,10 +149,11 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
     final boolean variablePositionLength;
     final int allowedSlop;
     private final PositionDeque stored;
-    private Iterator<Spans> storedIter;
+    private PositionDequeIterator storedIter;
     private Spans replayStored;
     private Spans replayBacking;
     private Spans active;
+    private boolean uninitializedForDoc = true;
 
     private int minStart;
     private int minEnd;
@@ -323,6 +326,10 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
       //stored.clear();
       if (hard) {
         stored.init(nextDocId);
+        if (uninitializedForDoc) {
+          return;
+        }
+        uninitializedForDoc = true;
         replayBacking = null;
         minStart = -1;
         maxEnd = -1;
@@ -341,21 +348,33 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
     
     public RecordingPushbackSpans reset(int hardMinStart, int softMinStart) {
       if (stored.isEmpty()) {
-        replayBacking = backing;
         storedIter = null;
       } else {
         replayStored = null;
         storedIter = stored.iteratorMinStart(hardMinStart, softMinStart);
+        if (storedIter != null) {
+          if (storedIter.hasNext()) {
+            active = storedIter.next();
+          } else {
+            storedIter = null;
+          }
+        }
       }
       return this;
     }
     public RecordingPushbackSpans reset(int restoreKey, int hardMinStart, int softMinStart) {
       if (stored.isEmpty()) {
-        replayBacking = backing;
         storedIter = null;
       } else {
         replayStored = null;
         storedIter = stored.iteratorMinStart(restoreKey, hardMinStart, softMinStart);
+        if (storedIter != null) {
+          if (storedIter.hasNext()) {
+            active = storedIter.next();
+          } else {
+            storedIter = null;
+          }
+        }
       }
       return this;
     }
@@ -422,6 +441,40 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
     }
 
     @Override
+    public int positionLengthFloor() throws IOException {
+      return lookaheadBacking == null ? 1 : lookaheadBacking.positionLengthFloor();
+    }
+
+    @Override
+    public int endPositionDecreaseCeiling() throws IOException {
+      final int storedLookahead = stored.lookaheadNextStartPosition();
+      final int theoreticalStart;
+      switch (storedLookahead) {
+        default:
+          theoreticalStart = storedLookahead;
+          break;
+        case -1:
+          theoreticalStart = backing.startPosition();
+          break;
+        case -2:
+          final int backingLookahead;
+          if (lookaheadBacking == null || (backingLookahead = lookaheadBacking.lookaheadNextStartPositionFloor()) < 0) {
+            theoreticalStart = backing.startPosition();
+          } else {
+            theoreticalStart = backingLookahead;
+          }
+          break;
+      }
+      final int endPosition = endPosition();
+      final int theoreticalEnd;
+      if (theoreticalStart >= endPosition || (theoreticalEnd = theoreticalStart + positionLengthFloor()) >= endPosition) {
+        return 0;
+      } else {
+        return endPosition - theoreticalEnd;
+      }
+    }
+
+    @Override
     public int nextStartPosition() throws IOException {
       throw new UnsupportedOperationException();
     }
@@ -447,7 +500,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
 
     private int advanceBacking() throws IOException {
       if (!checkMatchLimit || matchLimit-- > 0) {
-        this.stored.initProvisional();
+        this.stored.initProvisional(false);
         return backing.nextStartPosition();
       } else {
         return NO_MORE_POSITIONS;
@@ -518,6 +571,10 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
      * @return 
      */
     public int nextMatch(int hardMinStart, int softMinStart, int startCeiling, int minEnd) throws IOException {
+      if (uninitializedForDoc) {
+        uninitializedForDoc = false;
+        stored.initializeForDoc();
+      }
       Spans pending = null;
       int pendingStart = -1;
       int pendingEnd;
@@ -569,8 +626,6 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
         }
         storedIter = null;
         replayBacking = backing;
-        int ret = nextMatch(hardMinStart, softMinStart, startCeiling, minEnd);
-        return ret;
       }
       purgeStored(hardMinStart, minEnd);
       if (replayBacking != null) {
@@ -593,13 +648,13 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
         pending = null;
       }
       pending = backing;
-      final int lookahead = lookaheadBacking();
-      if (lookahead >= startCeiling) {
-        active = pending;
-        return ~lookahead;
-      }
-      if ((pendingStart = backing.startPosition()) >= hardMinStart || checkUnregister(pendingStart, backing.endPosition())) {
-        if ((pendingEnd = backing.endPosition()) >= minEnd || checkUnregister(pendingStart, pendingEnd)) {
+      if ((pendingStart = backing.startPosition()) >= hardMinStart) {
+        if ((pendingEnd = backing.endPosition()) >= minEnd) {
+          final int lookahead = lookaheadBacking();
+          if (lookahead >= startCeiling) {
+            active = pending;
+            return ~lookahead;
+          }
           // record for future use, otherwise (implicitly) discard forever
           switch (backingRegistered) {
             case STORED:
@@ -610,10 +665,13 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
             default:
               storeSpan();
           }
+        } else {
+          checkUnregister(pendingStart, pendingEnd);
         }
         backingRegistered = RegistrationStatus.NONE;
         pendingStart = advanceBacking(); // guaranteed to also be >= hardMinStart
       } else {
+        checkUnregister(pendingStart, backing.endPosition());
         backingRegistered = RegistrationStatus.NONE;
         if ((pendingStart = advanceBacking()) < hardMinStart) {
           do {
@@ -628,6 +686,11 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
       if (pendingStart < softMinStart) {
         do {
           if ((pendingEnd = backing.endPosition()) >= minEnd) {
+            final int lookahead = lookaheadBacking();
+            if (lookahead >= startCeiling) {
+              active = pending;
+              return ~lookahead;
+            }
             // record for future use, otherwise (implicitly) discard forever
             registerStartAndEndPositions(pendingStart, pendingEnd);
             storeSpan();
@@ -708,23 +771,23 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
 
     @Override
     public int nextDoc() throws IOException {
-      stored.clear(true);
+      stored.clear(true, true);
       int ret = backing.nextDoc();
       clear(true, ret);
-//      if (ret == Spans.NO_MORE_DOCS) {
-//        System.err.println("Done["+index+"]: "+stored.size()+": "+stored+", "+stored.printMemoryInfo());
-//      }
+      if (PositionDeque.TRACK_POOLING && ret == Spans.NO_MORE_DOCS) {
+        System.err.println("Done["+index+"]: "+stored.size()+": "+stored+", "+stored.printMemoryInfo());
+      }
       return ret;
     }
 
     @Override
     public int advance(int target) throws IOException {
-      stored.clear(true);
+      stored.clear(true, true);
       int ret = backing.advance(target);
       clear(true, ret);
-//      if (ret == Spans.NO_MORE_DOCS) {
-//        System.err.println("Done["+index+"]: "+stored.size()+": "+stored+", "+stored.printMemoryInfo());
-//      }
+      if (PositionDeque.TRACK_POOLING && ret == Spans.NO_MORE_DOCS) {
+        System.err.println("Done["+index+"]: "+stored.size()+": "+stored+", "+stored.printMemoryInfo());
+      }
       return ret;
     }
 
@@ -735,7 +798,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
     
   }
 
-  private static class OuterTPIWrapper extends TwoPhaseIterator {
+  private static final class OuterTPIWrapper extends TwoPhaseIterator {
 
     private final TwoPhaseIterator backing;
 
@@ -756,7 +819,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
 
   }
 
-  private static class OuterApproximationWrapper extends DocIdSetIterator {
+  private static final class OuterApproximationWrapper extends DocIdSetIterator {
 
     private final DocIdSetIterator backing;
     private final PositionDeque toRelease;
@@ -836,15 +899,16 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
   private final IndexLookahead[] lookaheadSpans;
   private final int lastIndex;
   private final int allowedSlop;
+  private final boolean loop;
   private SpansEntry spansHead = null;
 
-  private static final SpansEntry NO_MORE_POSITIONS_ENTRY = new NoMorePositionsSpansEntry();
+  private static final SpansEntry NO_MORE_POSITIONS_ENTRY = new SpansEntry();
+  private final SpansEntry greedySpansEntry;
   
-  private final ComboMode requestedComboMode;
-  private ComboMode comboMode;
+  private final ComboMode comboMode;
+  private final boolean greedyReturn;
   private final boolean combineRepeatGroups;
-  private final boolean requestedAllowOverlap;
-  private boolean allowOverlap;
+  private final boolean allowOverlap;
   private int lastEnd;
   
   private final RecordingPushbackSpans[][] repeatGroups;
@@ -853,17 +917,17 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
 
   public NearSpansOrdered(int allowedSlop, List<Spans> subSpans, ComboMode comboMode, int comboThreshold, boolean allowOverlap,
       boolean combineRepeatSpans, Iterator<TermSpansRepeatBuffer> reuseInput, List<TermSpansRepeatBuffer> reuseOutput, boolean offsets, boolean supportVariableTermSpansLength,
-      Iterator<PositionDeque> reuseDequeInput, List<PositionDeque> reuseDequeOutput, List<Spans> shingles) throws IOException {
+      Iterator<PositionDeque> reuseDequeInput, List<PositionDeque> reuseDequeOutput, List<Spans> shingles, boolean loop) throws IOException {
     this(allowedSlop, subSpans, comboMode, comboThreshold, allowOverlap, new LinkedList<>(), new LinkedList<>(),
-        combineRepeatSpans, reuseInput, reuseOutput, offsets, supportVariableTermSpansLength, reuseDequeInput, reuseDequeOutput, shingles);
+        combineRepeatSpans, reuseInput, reuseOutput, offsets, supportVariableTermSpansLength, reuseDequeInput, reuseDequeOutput, shingles, loop);
   }
 
   private NearSpansOrdered(int allowedSlop, List<Spans> subSpans, ComboMode comboMode, int comboThreshold, boolean allowOverlap, List<List<RecordingPushbackSpans>> repeatGroups, List<RecordingPushbackSpans> noRepeat,
       boolean combineRepeatSpans, Iterator<TermSpansRepeatBuffer> reuseInput, List<TermSpansRepeatBuffer> reuseOutput, boolean offsets, boolean supportVariableTermSpansLength,
-      Iterator<PositionDeque> reuseDequeInput, List<PositionDeque> reuseDequeOutput, List<Spans> shingles) throws IOException {
+      Iterator<PositionDeque> reuseDequeInput, List<PositionDeque> reuseDequeOutput, List<Spans> shingles, boolean loop) throws IOException {
     this(allowedSlop, wrapSpans(subSpans, allowedSlop, repeatGroups, noRepeat, combineRepeatSpans, reuseInput, reuseOutput, offsets, supportVariableTermSpansLength, comboMode,
         reuseDequeInput, reuseDequeOutput), comboMode, comboThreshold, allowOverlap, repeatGroups, noRepeat,
-        combineRepeatSpans, supportVariableTermSpansLength, shingles);
+        combineRepeatSpans, supportVariableTermSpansLength, shingles, loop);
   }
 
   private static final Comparator<RecordingPushbackSpans[]> ARRAY_SIZE_COMPARATOR = new Comparator<RecordingPushbackSpans[]>() {
@@ -875,8 +939,9 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
   };
 
   private NearSpansOrdered(int allowedSlop, RecordingPushbackSpans[] resettableSpans, ComboMode comboMode, int comboThreshold, boolean allowOverlap, List<List<RecordingPushbackSpans>> repeatGroups, List<RecordingPushbackSpans> noRepeat,
-      boolean combineRepeatGroups, boolean supportVariableTermSpansLength, List<Spans> shingles) throws IOException {
+      boolean combineRepeatGroups, boolean supportVariableTermSpansLength, List<Spans> shingles, boolean loop) throws IOException {
     super(Arrays.asList(resettableSpans), shingles);
+    this.loop = loop;
     if (repeatGroups.isEmpty()) {
       this.initializedRepeatGroups = true;
       this.repeatGroups = null;
@@ -895,7 +960,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
     this.resettableSpans = resettableSpans;
     this.lastIndex = this.resettableSpans.length - 1;
     RecordingPushbackSpans lastSpans;
-    if (comboMode != ComboMode.GREEDY_END_POSITION && allowedSlop == 0 && !supportVariableTermSpansLength
+    if (false && comboMode != ComboMode.GREEDY_END_POSITION && allowedSlop == 0 && !supportVariableTermSpansLength
         && (lastSpans = resettableSpans[lastIndex]).previousVariablePositionLength == null
         && !lastSpans.variablePositionLength
         && !resettableSpans[0].variablePositionLength) {
@@ -904,10 +969,22 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
       // this assumes that for a given term/startPosition, the endPosition will not change.
       // n.b. that this still works even allowing the same term to have different positionLengths at *different* startPositions
       comboMode = ComboMode.GREEDY_END_POSITION;
+      // TODO this is temporarily (permanently?) disabled. It causes a weird situation where the comboMode for the NearSpansOrdered
+      // differs from the comboMode set on the individual positionDeques; moreover, GREEDY has changed to actually not
+      // be naive with respect to variable subspans positionLengths, so I think comboMode can only be adjusted in this
+      // way for individual docs (provided indexed to support maxTermLength, decreasingPositionLength, etc.).
     }
-    this.requestedComboMode = comboMode;
     this.comboMode = comboMode;
-    this.requestedAllowOverlap = allowOverlap;
+    this.greedyReturn = ENABLE_GREEDY_RETURN && comboMode == ComboMode.GREEDY_END_POSITION;
+    if (comboMode != ComboMode.GREEDY_END_POSITION) {
+      this.greedySpansEntry = null;
+    } else {
+      Spans[] backingSpans = new Spans[this.resettableSpans.length];
+      for (int i = lastIndex; i >= 0; i--) {
+        backingSpans[i] = this.resettableSpans[i];
+      }
+      this.greedySpansEntry = new SpansEntry(backingSpans, lastIndex);
+    }
     this.allowOverlap = allowOverlap;
     this.allowedSlop = allowedSlop;
     this.combineRepeatGroups = combineRepeatGroups;
@@ -920,8 +997,6 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
     }
     this.lookaheadSpans = builder;
   }
-
-  private static final boolean PER_DOC_COMBO_MODE_RESET = true;
 
   @Override
   public int lookaheadNextStartPositionFloor() throws IOException {
@@ -936,33 +1011,70 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
   }
 
   private int positionLengthCeiling = UNINITIALIZED_AT_DOC;
+  private int positionLengthFloor = 0;
 
   @Override
-  public int positionLengthCeiling() {
+  public int positionLengthCeiling() throws IOException {
     if (lookaheadSpans == null) {
       return UNKNOWN_AT_SPANS;
     } else if (positionLengthCeiling != UNINITIALIZED_AT_DOC) {
       return positionLengthCeiling;
     } else {
-      int sumMaxPositionLengths = allowedSlop;
-      int endPositionMayDecrease = allowedSlop;
-      for (int i = lookaheadSpans.length - 1; i >= 0; i--) {
-        final int subclausePositionLengthCeiling = lookaheadSpans[i].positionLengthCeiling();
-        if (subclausePositionLengthCeiling <= MAX_SPECIAL_VALUE) {
-          return positionLengthCeiling = UNKNOWN_AT_DOC;
+      initPositionLengthLimits();
+      return positionLengthCeiling;
+    }
+  }
+
+  private void initPositionLengthLimits() throws IOException {
+    int sumMaxPositionLengths = allowedSlop;
+    int endPositionMayDecrease = allowedSlop;
+    for (int i = lookaheadSpans.length - 1; i >= 0; i--) {
+      final IndexLookahead subLookahead = lookaheadSpans[i];
+      positionLengthFloor += subLookahead.positionLengthFloor();
+      final int subclausePositionLengthCeiling = subLookahead.positionLengthCeiling();
+      if (subclausePositionLengthCeiling <= MAX_SPECIAL_VALUE) {
+        positionLengthCeiling = UNKNOWN_AT_DOC;
+        while (--i >= 0) {
+          positionLengthFloor += lookaheadSpans[i].positionLengthFloor();
         }
-        final int addMaxPositionLength;
-        if (subclausePositionLengthCeiling < 0) {
-          addMaxPositionLength = ~subclausePositionLengthCeiling;
-          if (endPositionMayDecrease < 2) {
-            endPositionMayDecrease += (addMaxPositionLength - 1);
-          }
-        } else {
-          addMaxPositionLength = subclausePositionLengthCeiling;
-        }
-        sumMaxPositionLengths += addMaxPositionLength;
+        return;
       }
-      return positionLengthCeiling = endPositionMayDecrease >= 2 ? ~sumMaxPositionLengths : sumMaxPositionLengths;
+      final int addMaxPositionLength;
+      if (subclausePositionLengthCeiling < 0) {
+        addMaxPositionLength = ~subclausePositionLengthCeiling;
+        if (endPositionMayDecrease < 2) {
+          endPositionMayDecrease += (addMaxPositionLength - 1);
+        }
+      } else {
+        addMaxPositionLength = subclausePositionLengthCeiling;
+      }
+      sumMaxPositionLengths += addMaxPositionLength;
+    }
+    positionLengthCeiling = endPositionMayDecrease >= 2 ? ~sumMaxPositionLengths : sumMaxPositionLengths;
+  }
+
+  @Override
+  public int positionLengthFloor() throws IOException {
+    if (lookaheadSpans == null) {
+      return subSpans.length;
+    } else if (positionLengthFloor != 0) {
+      return positionLengthFloor;
+    } else {
+      initPositionLengthLimits();
+      return positionLengthFloor;
+    }
+  }
+
+  @Override
+  public int endPositionDecreaseCeiling() throws IOException {
+    final int lookahead = lookaheadNextStartPositionFloor();
+    final int theoreticalStart = lookahead < 0 ? startPosition() + 1 : lookahead;
+    final int endPosition = endPosition();
+    final int theoreticalEnd;
+    if (theoreticalStart >= endPosition || (theoreticalEnd = theoreticalStart + positionLengthFloor()) >= endPosition) {
+      return 0;
+    } else {
+      return endPosition - theoreticalEnd;
     }
   }
 
@@ -975,20 +1087,18 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
     if (positionLengthCeiling != UNKNOWN_AT_SPANS) {
       positionLengthCeiling = UNINITIALIZED_AT_DOC;
     }
-    if (PER_DOC_COMBO_MODE_RESET) {
-      allowOverlap = requestedAllowOverlap;
-      comboMode = requestedComboMode;
-    } else if (comboMode == null) {
-      // only (partially) reset if we've fully shortcircuited processing of previous doc
-      comboMode = ComboMode.GREEDY_END_POSITION;
-    }
+    positionLengthFloor = 0;
   }
   
   @Override
   boolean twoPhaseCurrentDocMatches() throws IOException {
     assert unpositioned();
     reset();
-    if (nextStartPosition() != NO_MORE_POSITIONS) {
+    if (initNextSpansGroup() != NO_MORE_POSITIONS) {
+      if (!allowOverlap) {
+        spansIter = null;
+        lastEnd = spansHead.endPosition();
+      }
       return atFirstInCurrentDoc = true;
     }
     return false;
@@ -1018,7 +1128,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
       initializedRepeatGroups = true;
     }
     RecordingPushbackSpans first = resettableSpans[0];
-    PositionDeque.DLLReturnNode blah;
+    PositionDeque.DLLReturnNode returnNode;
     int startPosition = first.startPosition();
     do {
       int minStart = allowOverlap ? startPosition + 1 : lastEnd;
@@ -1026,9 +1136,13 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
         spansHead = NO_MORE_POSITIONS_ENTRY;
         return NO_MORE_POSITIONS;
       }
-      blah = resettableSpans[0].stored.buildLattice(startPosition, allowedSlop, comboMode);
-    } while (blah.isEmpty());
-    startPosition = blah.getCurrentStart();
+      returnNode = first.stored.buildLattice(startPosition, allowedSlop, comboMode, loop);
+    } while (greedyReturn ? returnNode.getGreedySlopRemaining() < 0 : returnNode.isEmpty());
+    startPosition = returnNode.getCurrentStart();
+    if (startPosition == Spans.NO_MORE_POSITIONS) {
+      spansHead = NO_MORE_POSITIONS_ENTRY;
+      return NO_MORE_POSITIONS;
+    }
 //    PositionDeque1.DLLReturnNode drn;
 //    if (((drn = blah.next) != null)) {
 //      System.err.println("start endSpanPosition "+aslfdkj);
@@ -1042,20 +1156,22 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
 //    }
     switch (comboMode) {
       case PER_END_POSITION:
-        spansIter = resettableSpans[0].stored.perEndPosition(blah);
+        spansIter = first.stored.perEndPosition(returnNode);
         break;
       case PER_POSITION:
       case PER_POSITION_PER_START_POSITION:
       case FULL_DISTILLED_PER_POSITION:
       case FULL_DISTILLED_PER_START_POSITION:
       case FULL_DISTILLED:
-      case GREEDY_END_POSITION:
-        spansIter = resettableSpans[0].stored.perPosition(blah, allowedSlop << 1, startPosition, comboMode);
+      //case GREEDY_END_POSITION:
+        spansIter = first.stored.perPosition(returnNode, allowedSlop << 1, startPosition, comboMode);
         break;
       case FULL:
-        spansIter = resettableSpans[0].stored.fullPositions(blah);
+        spansIter = first.stored.fullPositions(returnNode);
         break;
-      //case GREEDY_END_POSITION:
+      case GREEDY_END_POSITION:
+        this.spansHead = this.greedySpansEntry.init(allowedSlop - returnNode.getGreedySlopRemaining());
+        return first.startPosition();
       default:
         throw new UnsupportedOperationException("for comboMode "+comboMode);
     }
@@ -1063,98 +1179,8 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
       throw new AssertionError();
     } else {
       spansHead = spansIter.next();
-      if (!allowOverlap) {
-        lastEnd = spansHead.endPosition();
-        spansIter = null;
-      } else if (comboMode == ComboMode.GREEDY_END_POSITION) {
-        spansIter = null;
-      }
       return spansHead.startPosition();
     }
-  }
-
-  static abstract class SpansEntry implements Comparable<SpansEntry> {
-
-    protected int width;
-
-    SpansEntry init(int width) {
-      this.width = width;
-      return this;
-    }
-
-    public abstract int startPosition();
-
-    public abstract int endPosition();
-
-    public abstract void collect(SpanCollector collector) throws IOException;
-
-    @Override
-    public int compareTo(SpansEntry o) {
-      int ret = Integer.compare(startPosition(), o.startPosition());
-      if (ret != 0) {
-        return ret;
-      }
-      ret = Integer.compare(endPosition(), o.endPosition());
-      if (ret != 0) {
-        return ret;
-      }
-      return Integer.compare(width, o.width);
-    }
-
-  }
-
-  static class SpansEntryBase extends SpansEntry {
-
-    protected final Spans[] subSpans;
-    protected final int lastIndex;
-
-    public SpansEntryBase(Spans[] subSpans, int lastIndex) {
-      this.subSpans = subSpans;
-      this.lastIndex = lastIndex;
-    }
-
-    public SpansEntryBase init(int width) {
-      super.init(width);
-      return this;
-    }
-    @Override
-    public int startPosition() {
-      return subSpans[0].startPosition();
-    }
-
-    @Override
-    public int endPosition() {
-      try {
-        return subSpans[lastIndex].endPosition();
-      } catch (NullPointerException ex) {
-        throw new NullPointerException("for "+subSpans);
-      }
-    }
-    @Override
-    public void collect(SpanCollector collector) throws IOException {
-      for (int i = 0; i < subSpans.length; i++) {
-        subSpans[i].collect(collector);
-      }
-    }
-  }
-
-  private static final class NoMorePositionsSpansEntry extends SpansEntry {
-
-    @Override
-    public int startPosition() {
-      return NO_MORE_POSITIONS;
-    }
-
-    @Override
-    public int endPosition() {
-      return NO_MORE_POSITIONS;
-    }
-
-    @Override
-    public void collect(SpanCollector collector) throws IOException {
-      throw new IllegalStateException("spans.collect() called when positioned past end of content for document");
-    }
-
   }
 
   private Iterator<SpansEntry> spansIter = null;
@@ -1167,16 +1193,14 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
     }
     if (spansIter != null && spansIter.hasNext()) {
       spansHead = spansIter.next();
-      lastEnd = spansHead.endPosition();
       return spansHead.startPosition();
     } else {
-      int nextStartPosition;
-      if ((nextStartPosition = initNextSpansGroup()) >= 0) {
-        return nextStartPosition;
-      } else {
-        // no subsequent positions from previous unbuffered output
-        return initNextSpansGroup();
+      int ret = initNextSpansGroup();
+      if (!allowOverlap) {
+        spansIter = null;
+        lastEnd = spansHead.endPosition();
       }
+      return ret;
     }
   }
 
