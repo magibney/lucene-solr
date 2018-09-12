@@ -20,12 +20,13 @@ import java.io.IOException;
 import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.spans.PositionDeque.Node;
+import org.apache.lucene.search.spans.PositionDeque.RefLinkTracker;
 import org.apache.lucene.util.BytesRef;
 
 /**
  *
  */
-class StoredPostings extends PostingsEnum {
+final class StoredPostings extends PostingsEnum {
   private int freq;
   int startOffset;
   int endOffset;
@@ -35,8 +36,8 @@ class StoredPostings extends PostingsEnum {
   int positionLength;
   Term term;
   StoredPostings next;
-  StoredPostings trackNextRef;
-  
+  final RefLinkTracker<StoredPostings> trackNextRef = new RefLinkTracker<>(this);
+
   StoredPostings addNext(StoredPostings next) {
     return this.next = next;
   }
@@ -61,13 +62,20 @@ class StoredPostings extends PostingsEnum {
   }
   
   private static StoredPostings newInstance(Node n) {
-    StoredPostings ret = n.dequePointer[0].pool.getStoredPostings();
+    final PositionDeque d = n.dequePointer[0];
+    StoredPostings ret = d.pool.getStoredPostings();
     if (ret == null) {
       ret = new StoredPostings(true);
-      n.pool.addStoredPostings(ret);
+      if (PositionDeque.TRACK_POOLING) {
+        d.storedPostingsCt++;
+      }
     } else {
       ret.clear();
+      if (PositionDeque.TRACK_POOLING) {
+        d.storedPostingsCtR++;
+      }
     }
+    n.pool.addStoredPostings(ret.trackNextRef);
     return ret;
   }
 
