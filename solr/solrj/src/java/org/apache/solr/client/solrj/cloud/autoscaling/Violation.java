@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
 
+import org.apache.solr.common.IteratorWriter;
 import org.apache.solr.common.MapWriter;
 import org.apache.solr.common.util.Utils;
 
@@ -46,29 +47,6 @@ public class Violation implements MapWriter {
     this.actualVal = actualVal;
     this.tagKey = tagKey;
     hash = ("" + coll + " " + shard + " " + node + " " + String.valueOf(tagKey) + " " + Utils.toJSONString(getClause().toMap(new HashMap<>()))).hashCode();
-  }
-
-  static void collectViolatingReplicas(Ctx ctx, Row row) {
-    if (ctx.clause.tag.varType.meta.isNodeSpecificVal()) {
-      row.forEachReplica(replica -> {
-        if (ctx.clause.collection.isPass(replica.getCollection()) && ctx.clause.getShard().isPass(replica.getShard())) {
-          ctx.currentViolation.addReplica(new ReplicaInfoAndErr(replica)
-              .withDelta(ctx.clause.tag.delta(row.getVal(ctx.clause.tag.name))));
-        }
-      });
-    } else {
-      row.forEachReplica(replica -> {
-        if (ctx.clause.replica.isPass(0) && !ctx.clause.tag.isPass(row)) return;
-        if (!ctx.clause.replica.isPass(0) && ctx.clause.tag.isPass(row)) return;
-        if(!ctx.currentViolation.getClause().matchShard(replica.getShard(), ctx.currentViolation.shard)) return;
-        if (!ctx.clause.collection.isPass(ctx.currentViolation.coll) || !ctx.clause.shard.isPass(ctx.currentViolation.shard))
-          return;
-        ctx.currentViolation.addReplica(new ReplicaInfoAndErr(replica).withDelta(ctx.clause.tag.delta(row.getVal(ctx.clause.tag.name))));
-      });
-
-    }
-
-
   }
 
   public Violation addReplica(ReplicaInfoAndErr r) {
@@ -158,33 +136,40 @@ public class Violation implements MapWriter {
   @Override
   public void writeMap(EntryWriter ew) throws IOException {
     ew.putIfNotNull("collection", coll);
-    ew.putIfNotNull("shard", shard);
+    if (!Policy.ANY.equals(shard)) ew.putIfNotNull("shard", shard);
     ew.putIfNotNull("node", node);
-    ew.putIfNotNull("tagKey", String.valueOf(tagKey));
+    ew.putIfNotNull("tagKey", tagKey);
     ew.putIfNotNull("violation", (MapWriter) ew1 -> {
       if (getClause().isPerCollectiontag()) ew1.put("replica", actualVal);
       else ew1.put(clause.tag.name, String.valueOf(actualVal));
       ew1.putIfNotNull("delta", replicaCountDelta);
     });
     ew.put("clause", getClause());
+    if (!replicaInfoAndErrs.isEmpty()) {
+      ew.put("violatingReplicas", (IteratorWriter) iw -> {
+        for (ReplicaInfoAndErr replicaInfoAndErr : replicaInfoAndErrs) {
+          iw.add(replicaInfoAndErr.replicaInfo);
+        }
+      });
+    }
   }
 
   static class Ctx {
-    final Function<Clause.Condition, Object> evaluator;
-    String tagKey;
+    final Function<Condition, Object> evaluator;
+    Object tagKey;
     Clause clause;
     ReplicaCount count;
     Violation currentViolation;
     List<Row> allRows;
     List<Violation> allViolations = new ArrayList<>();
 
-    public Ctx(Clause clause, List<Row> allRows, Function<Clause.Condition, Object> evaluator) {
+    public Ctx(Clause clause, List<Row> allRows, Function<Condition, Object> evaluator) {
       this.allRows = allRows;
       this.clause = clause;
       this.evaluator = evaluator;
     }
 
-    public Ctx reset(String tagKey, ReplicaCount count, Violation currentViolation) {
+    public Ctx resetAndAddViolation(Object tagKey, ReplicaCount count, Violation currentViolation) {
       this.tagKey = tagKey;
       this.count = count;
       this.currentViolation = currentViolation;

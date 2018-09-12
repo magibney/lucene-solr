@@ -149,7 +149,7 @@ public class TestTopFieldCollector extends LuceneTestCase {
     for (int totalHitsThreshold = 1; totalHitsThreshold < 20; ++ totalHitsThreshold) {
       for (FieldDoc after : new FieldDoc[] { null, new FieldDoc(4, Float.NaN, new Object[] { 2L })}) {
         TopFieldCollector collector = TopFieldCollector.create(sort, 2, after, totalHitsThreshold);
-        FakeScorer scorer = new FakeScorer();
+        ScoreAndDoc scorer = new ScoreAndDoc();
 
         LeafCollector leafCollector1 = collector.getLeafCollector(reader.leaves().get(0));
         leafCollector1.setScorer(scorer);
@@ -243,8 +243,8 @@ public class TestTopFieldCollector extends LuceneTestCase {
           final LeafCollector in = topCollector.getLeafCollector(context);
           return new FilterLeafCollector(in) {
             @Override
-            public void setScorer(final Scorer scorer) throws IOException {
-              Scorer s = new Scorer(null) {
+            public void setScorer(final Scorable scorer) throws IOException {
+              Scorable s = new FilterScorable(scorer) {
 
                 int lastComputedDoc = -1;
 
@@ -255,21 +255,6 @@ public class TestTopFieldCollector extends LuceneTestCase {
                   }
                   lastComputedDoc = docID();
                   return scorer.score();
-                }
-
-                @Override
-                public float getMaxScore(int upTo) throws IOException {
-                  return scorer.getMaxScore(upTo);
-                }
-
-                @Override
-                public int docID() {
-                  return scorer.docID();
-                }
-
-                @Override
-                public DocIdSetIterator iterator() {
-                  return scorer.iterator();
                 }
 
               };

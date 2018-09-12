@@ -17,6 +17,7 @@
 package org.apache.solr.cloud.autoscaling;
 
 import java.io.IOException;
+import java.io.StringWriter;
 import java.lang.invoke.MethodHandles;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -24,6 +25,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 
@@ -36,6 +38,7 @@ import org.apache.solr.client.solrj.cloud.DistributedQueueFactory;
 import org.apache.solr.client.solrj.cloud.SolrCloudManager;
 import org.apache.solr.client.solrj.cloud.autoscaling.AutoScalingConfig;
 import org.apache.solr.client.solrj.cloud.autoscaling.Policy;
+import org.apache.solr.client.solrj.cloud.autoscaling.PolicyHelper;
 import org.apache.solr.client.solrj.cloud.autoscaling.ReplicaInfo;
 import org.apache.solr.client.solrj.cloud.autoscaling.Row;
 import org.apache.solr.client.solrj.cloud.autoscaling.Variable.Type;
@@ -52,7 +55,9 @@ import org.apache.solr.common.cloud.DocCollection;
 import org.apache.solr.common.cloud.Replica;
 import org.apache.solr.common.cloud.ZkStateReader;
 import org.apache.solr.common.util.NamedList;
+import org.apache.solr.common.util.TimeSource;
 import org.apache.solr.common.util.Utils;
+import org.apache.solr.util.TimeOut;
 import org.apache.zookeeper.KeeperException;
 import org.junit.After;
 import org.junit.BeforeClass;
@@ -82,6 +87,41 @@ public class TestPolicyCloud extends SolrCloudTestCase {
     cluster.deleteAllCollections();
     cluster.getSolrClient().getZkStateReader().getZkClient().setData(ZkStateReader.SOLR_AUTOSCALING_CONF_PATH,
         "{}".getBytes(StandardCharsets.UTF_8), true);
+  }
+
+  public void testCreateCollection() throws Exception  {
+    String commands =  "{ set-cluster-policy: [ {cores: '0', node: '#ANY'} ] }"; // disallow replica placement anywhere
+    cluster.getSolrClient().request(createAutoScalingRequest(SolrRequest.METHOD.POST, commands));
+    String collectionName = "testCreateCollection";
+    HttpSolrClient.RemoteSolrException exp = expectThrows(HttpSolrClient.RemoteSolrException.class,
+        () -> CollectionAdminRequest.createCollection(collectionName, "conf", 2, 1).process(cluster.getSolrClient()));
+
+    assertTrue(exp.getMessage().contains("No node can satisfy the rules"));
+    assertTrue(exp.getMessage().contains("AutoScaling.error.diagnostics"));
+
+    // wait for a while until we don't see the collection
+    TimeOut timeout = new TimeOut(30, TimeUnit.SECONDS, new TimeSource.NanoTimeSource());
+    boolean removed = false;
+    while (! timeout.hasTimedOut()) {
+      timeout.sleep(100);
+      removed = !cluster.getSolrClient().getZkStateReader().getClusterState().hasCollection(collectionName);
+      if (removed) {
+        timeout.sleep(500); // just a bit of time so it's more likely other
+        // readers see on return
+        break;
+      }
+    }
+    if (!removed) {
+      fail("Collection should have been deleted from cluster state but still exists: " + collectionName);
+    }
+
+    commands =  "{ set-cluster-policy: [ {cores: '<2', node: '#ANY'} ] }";
+    cluster.getSolrClient().request(createAutoScalingRequest(SolrRequest.METHOD.POST, commands));
+    CollectionAdminRequest.createCollection(collectionName, "conf", 2, 1).process(cluster.getSolrClient());
+    SolrClientCloudManager scm = new SolrClientCloudManager(new ZkDistributedQueueFactory(cluster.getSolrClient().getZkStateReader().getZkClient()), cluster.getSolrClient());
+    Policy.Session session = scm.getDistribStateManager().getAutoScalingConfig().getPolicy().createSession(scm);
+    System.out.println(Utils.writeJson(PolicyHelper.getDiagnostics(session), new StringWriter(), true).toString());
+
   }
 
   public void testDataProviderPerReplicaDetails() throws Exception {

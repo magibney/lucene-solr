@@ -49,7 +49,7 @@ public enum Operand {
     }
 
     @Override
-    public Object readRuleValue(Clause.Condition condition) {
+    public Object readRuleValue(Condition condition) {
       if (condition.val instanceof String) {
         String strVal = ((String) condition.val).trim();
         int hyphenIdx = strVal.indexOf('-');
@@ -91,7 +91,7 @@ public enum Operand {
     }
 
     @Override
-    public Object readRuleValue(Clause.Condition condition) {
+    public Object readRuleValue(Condition condition) {
       return RANGE_EQUAL.readRuleValue(condition);
     }
 
@@ -99,6 +99,7 @@ public enum Operand {
   NOT_EQUAL("!", 2) {
     @Override
     public TestStatus match(Object ruleVal, Object testVal) {
+      if(testVal == null) return PASS;
       return super.match(ruleVal, testVal) == PASS ? FAIL : PASS;
     }
 
@@ -202,7 +203,7 @@ public enum Operand {
     return operand + val.toString();
   }
 
-  public Object readRuleValue(Clause.Condition condition) {
+  public Object readRuleValue(Condition condition) {
     return condition.val;
   }
 }

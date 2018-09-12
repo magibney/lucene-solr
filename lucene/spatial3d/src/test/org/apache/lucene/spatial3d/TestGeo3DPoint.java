@@ -75,10 +75,10 @@ import org.apache.lucene.spatial3d.geom.XYZSolidFactory;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.DocIdSetBuilder;
 import org.apache.lucene.util.FixedBitSet;
+import org.apache.lucene.util.FutureArrays;
 import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.NumericUtils;
-import org.apache.lucene.util.StringHelper;
 import org.apache.lucene.util.TestUtil;
 
 import com.carrotsearch.randomizedtesting.generators.RandomNumbers;
@@ -86,14 +86,14 @@ import com.carrotsearch.randomizedtesting.generators.RandomNumbers;
 public class TestGeo3DPoint extends LuceneTestCase {
 
   private static Codec getCodec() {
-    if (Codec.getDefault().getName().equals("Lucene70")) {
+    if (Codec.getDefault().getName().equals("Lucene80")) {
       int maxPointsInLeafNode = TestUtil.nextInt(random(), 16, 2048);
       double maxMBSortInHeap = 3.0 + (3*random().nextDouble());
       if (VERBOSE) {
         System.out.println("TEST: using Lucene60PointsFormat with maxPointsInLeafNode=" + maxPointsInLeafNode + " and maxMBSortInHeap=" + maxMBSortInHeap);
       }
 
-      return new FilterCodec("Lucene70", Codec.getDefault()) {
+      return new FilterCodec("Lucene80", Codec.getDefault()) {
         @Override
         public PointsFormat pointsFormat() {
           return new PointsFormat() {
@@ -1403,11 +1403,11 @@ public class TestGeo3DPoint extends LuceneTestCase {
         for(int dim=0;dim<numDims;dim++) {
           int offset = bytesPerDim * dim;
           // other.min < this.min?
-          if (StringHelper.compare(bytesPerDim, other.minPackedValue, offset, minPackedValue, offset) < 0) {
+          if (FutureArrays.compareUnsigned(other.minPackedValue, offset, offset + bytesPerDim, minPackedValue, offset, offset + bytesPerDim) < 0) {
             return false;
           }
           // other.max < this.max?
-          if (StringHelper.compare(bytesPerDim, other.maxPackedValue, offset, maxPackedValue, offset) > 0) {
+          if (FutureArrays.compareUnsigned(other.maxPackedValue, offset, offset + bytesPerDim, maxPackedValue, offset, offset + bytesPerDim) > 0) {
             return false;
           }
         }
