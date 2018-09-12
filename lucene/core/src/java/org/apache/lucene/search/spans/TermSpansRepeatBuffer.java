@@ -26,7 +26,7 @@ import org.apache.lucene.util.BytesRef;
 /**
  *
  */
-public class TermSpansRepeatBuffer {
+public final class TermSpansRepeatBuffer {
 
   private static final int DEFAULT_CAPACITY = 16; // power of 2
   private static final int MIN_CAPACITY = 2; // power of 2
@@ -244,15 +244,13 @@ public class TermSpansRepeatBuffer {
     maxPositionLength = IndexLookahead.UNINITIALIZED_AT_DOC;
   }
   
-  public static class RepeatTermSpans extends Spans implements IndexLookahead {
+  public static final class RepeatTermSpans extends Spans implements IndexLookahead {
 
     private final TermSpansRepeatBuffer backing;
     final TermSpans backingSpans;
     private final boolean offsets;
     private final boolean payloads;
-    private final PostingsEnum postings;
-    private final RepeatPostingsEnum offsetPostings;
-    private final ResettablePostings resettablePostings;
+    private final RepeatPostingsEnum postings;
     private final Term term;
     private final int repeatIndex;
     private int bufferIndex = -1;
@@ -268,20 +266,7 @@ public class TermSpansRepeatBuffer {
       this.term = backingSpans.term;
       this.offsets = offsets;
       this.payloads = payloads;
-      if (offsets) {
-        this.postings = this.offsetPostings = payloads ? new PayloadRepeatPostingsEnum(this) : new RepeatPostingsEnum(this);
-        this.resettablePostings = this.offsetPostings;
-      } else {
-        this.offsetPostings = null;
-        if (payloads) {
-          PayloadNoOffsetsRepeatPostingsEnum payloadNoOffsetsPostings = new PayloadNoOffsetsRepeatPostingsEnum(this);
-          this.resettablePostings = payloadNoOffsetsPostings;
-          this.postings = payloadNoOffsetsPostings;
-        } else {
-          this.resettablePostings = null;
-          this.postings = new NoOffsetsRepeatPostingsEnum(this);
-        }
-      }
+      this.postings = new RepeatPostingsEnum(this, payloads, offsets);
       this.repeatIndex = index;
     }
 
@@ -294,7 +279,7 @@ public class TermSpansRepeatBuffer {
       startPosition = -1;
       endPosition = -1;
       if (offsets || payloads) {
-        resettablePostings.reset();
+        postings.reset();
       }
       this.bufferIndex = -1;
     }
@@ -302,6 +287,24 @@ public class TermSpansRepeatBuffer {
     @Override
     public int positionLengthCeiling() {
       return backing.maxPositionLength;
+    }
+
+    @Override
+    public int positionLengthFloor() throws IOException {
+      return 1;
+    }
+
+    @Override
+    public int endPositionDecreaseCeiling() throws IOException {
+      final int lookahead = lookaheadNextStartPositionFloor();
+      final int theoreticalStart = lookahead < 0 ? startPosition() + 1 : lookahead;
+      final int extantEndPosition = endPosition();
+      final int theoreticalEnd;
+      if (theoreticalStart >= extantEndPosition || (theoreticalEnd = theoreticalStart + positionLengthFloor()) >= extantEndPosition) {
+        return 0;
+      } else {
+        return extantEndPosition - theoreticalEnd;
+      }
     }
 
     @Override
@@ -352,8 +355,8 @@ public class TermSpansRepeatBuffer {
         bufferIndex = backing.nextStartPosition(bufferIndex, repeatIndex);
       }
       endPosition = -1;
-      if (offsets) {
-        offsetPostings.reset();
+      if (offsets || payloads) {
+        postings.reset();
       }
       if (bufferIndex < 0) {
         startPosition = -1;
@@ -436,116 +439,11 @@ public class TermSpansRepeatBuffer {
     }
     
   }
-  
-  private static class NoOffsetsRepeatPostingsEnum extends PostingsEnum {
-    
-    private final TermSpans backingSpans;
 
-    public NoOffsetsRepeatPostingsEnum(RepeatTermSpans backing) {
-      this.backingSpans = backing.backingSpans;
-    }
-    
-    @Override
-    public int freq() throws IOException {
-      return backingSpans.freq;
-    }
+  static final class RepeatPostingsEnum extends PostingsEnum {
 
-    @Override
-    public int nextPosition() throws IOException {
-      throw new UnsupportedOperationException("Not supported.");
-    }
-
-    @Override
-    public int startOffset() throws IOException {
-      return -1;
-    }
-
-    @Override
-    public int endOffset() throws IOException {
-      return -1;
-    }
-
-    @Override
-    public BytesRef getPayload() throws IOException {
-      return null;
-    }
-
-    @Override
-    public int docID() {
-      return backingSpans.docID();
-    }
-
-    @Override
-    public int nextDoc() throws IOException {
-      throw new UnsupportedOperationException("Not supported.");
-    }
-
-    @Override
-    public int advance(int target) throws IOException {
-      throw new UnsupportedOperationException("Not supported.");
-    }
-
-    @Override
-    public long cost() {
-      return backingSpans.cost();
-    }
-    
-  }
-  
-  private static final class PayloadNoOffsetsRepeatPostingsEnum extends NoOffsetsRepeatPostingsEnum implements ResettablePostings {
-
-    private final RepeatTermSpans backing;
-    private final TermSpansRepeatBuffer backingBuf;
-    private final PostingsEnum backingPostings;
-    private BytesRef payload;
-
-    public PayloadNoOffsetsRepeatPostingsEnum(RepeatTermSpans backing) {
-      super(backing);
-      this.backing = backing;
-      this.backingBuf = backing.backing;
-      this.backingPostings = backing.backingSpans.postings;
-    }
-
-    @Override
-    public BytesRef getPayload() throws IOException {
-      return backing.bufferIndex < 0 ? backingPostings.getPayload()
-          : (payload != null ? payload : (payload = backingBuf.payloadBuffer[backing.bufferIndex & backingBuf.indexMask]));
-    }
-
-    @Override
-    public void reset() {
-      payload = null;
-    }
-
-  }
-
-  private static interface ResettablePostings {
-    void reset();
-  }
-
-  private static final class PayloadRepeatPostingsEnum extends RepeatPostingsEnum {
-
-    private BytesRef payload;
-
-    public PayloadRepeatPostingsEnum(RepeatTermSpans backing) {
-      super(backing);
-    }
-
-    @Override
-    public BytesRef getPayload() throws IOException {
-      return backing.bufferIndex < 0 ? backingPostings.getPayload()
-          : (payload != null ? payload : (payload = backingBuf.payloadBuffer[backing.bufferIndex & backingBuf.indexMask]));
-    }
-
-    @Override
-    public void reset() {
-      super.reset();
-      payload = null;
-    }
-
-  }
-
-  private static class RepeatPostingsEnum extends PostingsEnum implements ResettablePostings {
+    private final boolean trackPayload;
+    private final boolean trackOffsets;
 
     protected final RepeatTermSpans backing;
     protected final TermSpansRepeatBuffer backingBuf;
@@ -553,8 +451,11 @@ public class TermSpansRepeatBuffer {
     protected final PostingsEnum backingPostings;
     private int startOffset = -1;
     private int endOffset = -1;
+    private BytesRef payload;
 
-    public RepeatPostingsEnum(RepeatTermSpans backing) {
+    public RepeatPostingsEnum(RepeatTermSpans backing, boolean trackPayload, boolean trackOffsets) {
+      this.trackPayload = trackPayload;
+      this.trackOffsets = trackOffsets;
       this.backing = backing;
       this.backingBuf = backing.backing;
       this.backingSpans = backing.backingSpans;
@@ -564,6 +465,7 @@ public class TermSpansRepeatBuffer {
     public void reset() {
       startOffset = -1;
       endOffset = -1;
+      payload = null;
     }
     
     @Override
@@ -578,19 +480,17 @@ public class TermSpansRepeatBuffer {
 
     @Override
     public int startOffset() throws IOException {
-      return backing.bufferIndex < 0 ? backingPostings.startOffset()
-          : (startOffset >= 0 ? startOffset : (startOffset = backingBuf.startOffsetBuffer[backing.bufferIndex & backingBuf.indexMask]));
+      return trackOffsets ? (backing.bufferIndex < 0 ? backingPostings.startOffset() : (startOffset >= 0 ? startOffset : (startOffset = backingBuf.startOffsetBuffer[backing.bufferIndex & backingBuf.indexMask]))) : -1;
     }
 
     @Override
     public int endOffset() throws IOException {
-      return backing.bufferIndex < 0 ? backingPostings.endOffset()
-          : (endOffset >= 0 ? endOffset : (endOffset = backingBuf.endOffsetBuffer[backing.bufferIndex & backingBuf.indexMask]));
+      return trackOffsets ? (backing.bufferIndex < 0 ? backingPostings.endOffset() : (endOffset >= 0 ? endOffset : (endOffset = backingBuf.endOffsetBuffer[backing.bufferIndex & backingBuf.indexMask]))) : -1;
     }
 
     @Override
     public BytesRef getPayload() throws IOException {
-      return null;
+      return trackPayload ? (backing.bufferIndex < 0 ? backingPostings.getPayload() : (payload != null ? payload : (payload = backingBuf.payloadBuffer[backing.bufferIndex & backingBuf.indexMask]))) : null;
     }
 
     @Override

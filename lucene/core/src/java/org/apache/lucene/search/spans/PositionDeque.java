@@ -32,8 +32,6 @@ import java.util.PriorityQueue;
 import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.spans.NearSpansOrdered.RecordingPushbackSpans;
-import org.apache.lucene.search.spans.NearSpansOrdered.SpansEntry;
-import org.apache.lucene.search.spans.NearSpansOrdered.SpansEntryBase;
 import org.apache.lucene.search.spans.SpanNearQuery.ComboMode;
 
 /**
@@ -70,15 +68,22 @@ public class PositionDeque implements Iterable<Spans> {
   private final DLLReturnNode returned;
   private final RevisitNode revisit;
   private final ComboMode comboMode;
+  private final boolean greedyReturn;
   private final int allowedSlop;
   final PositionDeque prev;
   private final PositionDeque next;
   private final PositionDeque last;
   final int phraseIndex;
+  private final int phraseSize;
   private final boolean offsets;
   private Node[] nodeBuffer;
   private int tail = 0;
   private int head = 0;
+  private boolean uninitializedForDoc = true;
+
+  void initializeForDoc() {
+    uninitializedForDoc = false;
+  }
   
   // allows provisional nodes to resuse same offset id/index, while preserving a unique phraseScopeId.
   private final long repeatProvisionalIncrement;
@@ -90,8 +95,10 @@ public class PositionDeque implements Iterable<Spans> {
   private PositionDeque(int size, int phraseIndex, RecordingPushbackSpans driver, PositionDeque next, PositionDeque last, boolean offsets, Iterator<PositionDeque> reuseInput, List<PositionDeque> reuseOutput, int capacityHint, boolean supportVariableTermSpansLength, ComboMode comboMode) {
     this.supportVariableTermSpansLength = supportVariableTermSpansLength;
     this.phraseIndex = phraseIndex;
+    this.phraseSize = size;
     this.driver = driver;
     this.comboMode = comboMode;
+    this.greedyReturn = ENABLE_GREEDY_RETURN && comboMode == ComboMode.GREEDY_END_POSITION;
     this.allowedSlop = driver.allowedSlop;
     this.next = next;
     this.offsets = offsets;
@@ -103,12 +110,14 @@ public class PositionDeque implements Iterable<Spans> {
       this.nodeBuffer = reuse.nodeBuffer;
 
       // the following references preserve the node pool across segments
-      reuse.clear(true);
+      reuse.clear(true, true);
       reuse.returned.clear();
       this.dequePointer = reuse.dequePointer;
       this.pool = reuse.pool;
       this.nodePoolHead = reuse.nodePoolHead;
       this.nodePoolTail = reuse.nodePoolTail;
+      enqueueForPoolReturn(reuse.provisional);
+      returnNodesToPool();
       this.returned = reuse.returned;
     } else {
       if (reuseOutput != null) {
@@ -131,6 +140,8 @@ public class PositionDeque implements Iterable<Spans> {
       this.revisit = new RevisitNode();
       this.prev = new PositionDeque(size, phraseIndex, driver.previous, this, this.last, offsets, reuseInput, reuseOutput, capacityHint, supportVariableTermSpansLength, comboMode);
       this.snStack = null;
+      this.blStack = null;
+      this.dbStack = null;
       this.perEndPositionIter = null;
       this.fullPositionsIter = null;
       this.perPositionIter = null;
@@ -139,9 +150,43 @@ public class PositionDeque implements Iterable<Spans> {
       this.last = last == null ? this : last;
       this.prev = null;
       this.snStack = new SLLNode[size];
-      this.perEndPositionIter = new PerEndPositionIter(size, allowedSlop, root, last.returned.anchor);
-      this.fullPositionsIter = new FullPositionsIter(size, allowedSlop, last.returned.anchor);
-      this.perPositionIter = new PerPositionIter(allowedSlop, comboMode);
+      this.blStack = new StackFrame[size];
+      this.dbStack = new DeleteBacklinksStackFrame[size];
+      PositionDeque d = this;
+      for (int i = 0; i < size; i++) {
+        this.dbStack[i] = new DeleteBacklinksStackFrame();
+        this.blStack[i] = new StackFrame(d, greedyReturn);
+        d = d.next;
+      }
+      switch (comboMode) {
+        case PER_END_POSITION:
+          this.perEndPositionIter = new PerEndPositionIter(size, allowedSlop, root, last.returned.anchor);
+          this.fullPositionsIter = null;
+          this.perPositionIter = null;
+          break;
+        case PER_POSITION:
+        case PER_POSITION_PER_START_POSITION:
+        case FULL_DISTILLED_PER_POSITION:
+        case FULL_DISTILLED_PER_START_POSITION:
+        case FULL_DISTILLED:
+          //case GREEDY_END_POSITION:
+          this.perEndPositionIter = null;
+          this.fullPositionsIter = null;
+          this.perPositionIter = new PerPositionIter(allowedSlop, comboMode);
+          break;
+        case FULL:
+          this.perEndPositionIter = null;
+          this.fullPositionsIter = new FullPositionsIter(size, allowedSlop, last.returned.anchor);
+          this.perPositionIter = null;
+          break;
+        case GREEDY_END_POSITION:
+          this.perEndPositionIter = null;
+          this.fullPositionsIter = null;
+          this.perPositionIter = null;
+          break;
+        default:
+          throw new UnsupportedOperationException("for comboMode " + comboMode);
+      }
     }
     this.repeatProvisionalIncrement = (long)Integer.highestOneBit(size) << (Integer.SIZE + 1);
   }
@@ -150,29 +195,34 @@ public class PositionDeque implements Iterable<Spans> {
     provisional = getPooledNode(driver.backing);
   }
 
-  void initProvisional() {
+  void initProvisional(boolean newDoc) {
     if (initProvisional) {
-      if (provisional.validity == PROVISIONAL) {
-        if (provisional.initialzedReverseLinks != null) {
-          provisional.validity = 0;
-        } else {
-          provisional.trackNextRefProvisional = null;
-          if (provisional.startPosition < 0) {
-            // we're not actually saving it -- that would have been handled in storeSpan() --
-            // we're just signaling that it should no longer refer to backing spans,
-            // and more importantly indicating when it's safe to purge from the purge queue!
-            provisional.startPosition = provisional.backing.startPosition();
-          }
-          if (provisionalPurgeQueueTail == null) {
-            provisionalPurgeQueueHead = provisional;
-            provisionalPurgeQueueTail = provisional;
+      if (greedyReturn || newDoc) {
+        provisional.clear();
+        provisional.initProvisionalGreedy(driver.backing);
+      } else {
+        if (provisional.validity == PROVISIONAL) {
+          if (provisional.initialzedReverseLinks != null) {
+            provisional.validity = 0;
           } else {
-            provisionalPurgeQueueTail.trackNextRefProvisional = provisional;
-            provisionalPurgeQueueTail = provisional;
+            provisional.trackNextRefProvisional = null;
+            if (provisional.startPosition < 0) {
+              // we're not actually saving it -- that would have been handled in storeSpan() --
+              // we're just signaling that it should no longer refer to backing spans,
+              // and more importantly indicating when it's safe to purge from the purge queue!
+              provisional.startPosition = provisional.backing.startPosition();
+            }
+            if (provisionalPurgeQueueTail == null) {
+              provisionalPurgeQueueHead = provisional;
+              provisionalPurgeQueueTail = provisional;
+            } else {
+              provisionalPurgeQueueTail.trackNextRefProvisional = provisional;
+              provisionalPurgeQueueTail = provisional;
+            }
           }
         }
+        provisional = getPooledNode(driver.backing);
       }
-      provisional = getPooledNode(driver.backing);
       initProvisional = false;
     }
   }
@@ -209,6 +259,17 @@ public class PositionDeque implements Iterable<Spans> {
     return (iterNode != null && iterNode.prev != null) ? iterNode.prev.index : headNode.index;
   }
   
+  int lookaheadNextStartPosition() {
+    final Node lookaheadStored;
+    if (iterNode == null) {
+      return -2;
+    } else if ((lookaheadStored = iterNode.next) == null) {
+      return -1;
+    } else {
+      return lookaheadStored.startPosition;
+    }
+  }
+
   public Node getLastNode() {
     final Node ret;
     if (iterNode != null) {
@@ -228,9 +289,33 @@ public class PositionDeque implements Iterable<Spans> {
     return head - tail;
   }
 
+  static final boolean TRACK_POOLING = false;
+
   public String printMemoryInfo() {
-    return "created "+createNodeCount+" nodes; reused "+reusedNodeCount+" times; dllEndNodeLink="+dllEndNodeLinkCt+", fullEndNodeLink="+fullEndNodeLinkCt
-        +", dllNode="+dllNodeCt+", sllNode="+sllNodeCt+", dllReturnNode="+dllReturnNodeCt+", revisitNode="+revisitNodeCt;
+    StringBuilder sb = new StringBuilder();
+    sb.append("created ").append(createNodeCount).append(" nodes; reused ").append(reusedNodeCount).append(" times");
+    if (dllEndNodeLinkCtR != 0 || dllEndNodeLinkCt != 0) {
+      sb.append(", dllEndNodeLink=").append(dllEndNodeLinkCt).append("/").append(dllEndNodeLinkCtR);
+    }
+    if (fullEndNodeLinkCtR != 0 || fullEndNodeLinkCt != 0) {
+      sb.append(", fullEndNodeLink=").append(fullEndNodeLinkCt).append("/").append(fullEndNodeLinkCtR);
+    }
+    if (dllNodeCtR != 0 || dllNodeCt != 0) {
+      sb.append(", dllNode=").append(dllNodeCt).append("/").append(dllNodeCtR);
+    }
+    if (sllNodeCtR != 0 || sllNodeCt != 0) {
+      sb.append(", sllNode=").append(sllNodeCt).append("/").append(sllNodeCtR);
+    }
+    if (dllReturnNodeCtR != 0 || dllReturnNodeCt != 0) {
+      sb.append(", dllReturnNode=").append(dllReturnNodeCt).append("/").append(dllReturnNodeCtR);
+    }
+    if (revisitNodeCtR != 0 || revisitNodeCt != 0) {
+      sb.append(", revisitNode=").append(revisitNodeCt).append("/").append(revisitNodeCtR);
+    }
+    if (storedPostingsCtR != 0 || storedPostingsCt != 0) {
+      sb.append(", storedPostings=").append(storedPostingsCt).append("/").append(storedPostingsCtR);
+    }
+    return sb.toString();
   }
 
   public SpanCollector getCollector(int startPosition, int endPosition, int width) {
@@ -249,28 +334,59 @@ public class PositionDeque implements Iterable<Spans> {
     active = false;
   }
 
-  private static final class LocalArrayList<E> implements Iterator<E>, Collection<E> {
+  static final class LocalNodeArrayList extends LocalArrayList<Node> {
 
-    private final ArrayCreator<E> arrayCreator;
-    private int iterIdx = -1;
-    private E[] data;
-    private int capacity;
-    private int size = 0;
-    private LocalArrayList<E> trackNextRef;
+    LocalNodeArrayList trackNextRef;
 
-    public LocalArrayList(int initialCapacityHint, ArrayCreator<E> arrayCreator) {
-      this.capacity = Math.max(MIN_CAPACITY, Integer.highestOneBit(initialCapacityHint - 1) << 1);
-      this.data = arrayCreator.newArray(capacity);
-      this.arrayCreator = arrayCreator;
+    public LocalNodeArrayList(int initialCapacityHint) {
+      super(initialCapacityHint);
     }
-    
+
+    @Override
+    protected Node[] newArray(int arrayCapacity) {
+      return new Node[arrayCapacity];
+    }
+
+  }
+
+  private static final class LocalDRNArrayList extends LocalArrayList<DLLReturnNode> {
+
+    public LocalDRNArrayList(int initialCapacityHint) {
+      super(initialCapacityHint);
+    }
+
+    @Override
+    protected DLLReturnNode[] newArray(int arrayCapacity) {
+      return new DLLReturnNode[arrayCapacity];
+    }
+
+  }
+
+  private static abstract class LocalArrayList<E> implements Iterator<E>, Collection<E> {
+
+    private int iterIdx = -1;
+    protected E[] data;
+    private int capacity;
+    protected int size = 0;
+
+    void sort(Comparator<? super E> comparator) {
+      Arrays.sort(data, 0, size, comparator);
+    }
+
+    protected LocalArrayList(int initialCapacityHint) {
+      this.capacity = Math.max(PositionDeque.MIN_CAPACITY, Integer.highestOneBit(initialCapacityHint - 1) << 1);
+      this.data = newArray(capacity);
+    }
+
     public void reset(int requiredCapacity) {
       if (requiredCapacity > capacity) {
         final int newCapacity = Integer.highestOneBit(requiredCapacity - 1) << 1;
-        data = arrayCreator.newArray(newCapacity);
+        data = newArray(newCapacity);
       }
       size = 0;
     }
+
+    protected abstract E[] newArray(int arrayCapacity);
 
     @Override
     public int size() {
@@ -306,7 +422,7 @@ public class PositionDeque implements Iterable<Spans> {
     @Override
     public boolean add(E e) {
       if (size == capacity) {
-        E[] nextData = arrayCreator.newArray(capacity <<= 1);
+        E[] nextData = newArray(capacity <<= 1);
         System.arraycopy(data, 0, nextData, 0, size);
         data = nextData;
       }
@@ -360,7 +476,7 @@ public class PositionDeque implements Iterable<Spans> {
   private Node provisional;
   private final PositionDequeCollector collector = new PositionDequeCollector(this);
   
-  private static class PositionDequeCollector implements SpanCollector {
+  private static final class PositionDequeCollector implements SpanCollector {
 
     private final PositionDeque deque;
     private Node n;
@@ -392,23 +508,23 @@ public class PositionDeque implements Iterable<Spans> {
   }
   
   @Override
-  public Iterator<Spans> iterator() {
+  public PositionDequeIterator iterator() {
     iterator.resetIterator(tailNode, true);
     return iterator;
   }
 
-  public Iterator<Spans> descendingIterator() {
+  public PositionDequeIterator descendingIterator() {
     iterator.resetIterator(headNode, false);
     return iterator;
   }
 
-  public Iterator<Spans> iterator(int startKey) {
+  public PositionDequeIterator iterator(int startKey) {
     Node n = validateStartKeyWithRangeCheck(startKey);
     iterator.resetIterator(n, true);
     return iterator;
   }
 
-  public Iterator<Spans> iteratorMinStart(int startKey, int hardMinStart, int softMinStart) {
+  public PositionDequeIterator iteratorMinStart(int startKey, int hardMinStart, int softMinStart) {
     return iteratorInternal(startKey, hardMinStart, softMinStart, true);
   }
   
@@ -431,7 +547,7 @@ public class PositionDeque implements Iterable<Spans> {
     return n;
   }
 
-  public Iterator<Spans> iteratorMinStart(int hardMinStart, int softMinStart) {
+  public PositionDequeIterator iteratorMinStart(int hardMinStart, int softMinStart) {
     return iteratorInternal(tail, hardMinStart, softMinStart, true);
   }
 
@@ -444,7 +560,7 @@ public class PositionDeque implements Iterable<Spans> {
     int idx = binarySearch(nodeBuffer, tail, head, hardMinStart, indexMask);
     Node newTail;
     if (idx == head || (newTail = validateStartKey(idx)) == null) {
-      clear(true);
+      clear(true, false);
       return true;
     } else {
       newTail.truncatePreceding();
@@ -452,7 +568,7 @@ public class PositionDeque implements Iterable<Spans> {
     }
   }
   
-  public Iterator<Spans> iteratorInternal(int fromIdx, int hardMinStart, int softMinStart, boolean ascending) {
+  public PositionDequeIterator iteratorInternal(int fromIdx, int hardMinStart, int softMinStart, boolean ascending) {
     Node n;
     if (tailNode.startPosition < hardMinStart) {
       if (truncate(hardMinStart)) {
@@ -533,16 +649,9 @@ public class PositionDeque implements Iterable<Spans> {
     }
   }
 
-  private final class PositionDequeIterator implements Iterator<Spans> {
+  final class PositionDequeIterator implements Iterator<Spans> {
 
-    private final Node initNode = new Node() {
-
-      @Override
-      public void remove() {
-        throw new IllegalStateException("remove called on unpositioned iterator");
-      }
-      
-    };
+    private final Node initNode = new Node();
     private boolean ascending;
 
     private void resetIterator(Node n, boolean ascending) {
@@ -583,7 +692,7 @@ public class PositionDeque implements Iterable<Spans> {
 
   }
 
-  private static class PerEndPositionIter implements Iterator<SpansEntry> {
+  private static final class PerEndPositionIter implements Iterator<SpansEntry> {
 
     private final int lastIndex;
     private final int allowedSlop;
@@ -593,18 +702,18 @@ public class PositionDeque implements Iterable<Spans> {
     private final DLLReturnNode anchor;
     private int width;
     private DLLReturnNode drn;
-    private SpansEntryBase spansEntry;
+    private SpansEntry spansEntry;
     private boolean hasNextInitialized = false;
     private int nextEntry = 0;
-    private final SpansEntryBase[] spansEntries;
+    private final SpansEntry[] spansEntries;
 
     public PerEndPositionIter(int length, int allowedSlop, Node root, DLLReturnNode endPositionReturnNodeAnchor) {
       this.lastIndex = length - 1;
       this.backingSpans = new Node[][] {spans = new Node[length], new Node[length]};
       this.allowedSlop = allowedSlop;
       this.root = root;
-      this.spansEntries = new SpansEntryBase[]{spansEntry = new SpansEntryBase(spans, lastIndex),
-        new SpansEntryBase(backingSpans[1], lastIndex)};
+      this.spansEntries = new SpansEntry[]{spansEntry = new SpansEntry(spans, lastIndex),
+        new SpansEntry(backingSpans[1], lastIndex)};
       this.anchor = endPositionReturnNodeAnchor;
     }
 
@@ -656,18 +765,7 @@ public class PositionDeque implements Iterable<Spans> {
     }
   };
   
-  private static interface ArrayCreator<E> {
-    E[] newArray(int size);
-  }
-  
-  private static final ArrayCreator<DLLReturnNode> DRN_ARRAY_CREATOR = new ArrayCreator<DLLReturnNode>() {
-    @Override
-    public DLLReturnNode[] newArray(int size) {
-      return new DLLReturnNode[size];
-    }
-  };
-  
-  private static class PerPositionIter implements Iterator<SpansEntry> {
+  private static final class PerPositionIter implements Iterator<SpansEntry> {
 
     private int startPosition;
     private final int allowedSlop;
@@ -678,17 +776,17 @@ public class PositionDeque implements Iterable<Spans> {
     private int drnsSize;
     private boolean backingInitialized = false;
     private final WidthAtStartEndIter backing;
-    private final LocalArrayList<DLLReturnNode> drnsBuilder = new LocalArrayList<>(2, DRN_ARRAY_CREATOR);
-    private final IntObjectHashMap<LocalArrayList<Node>> bySlopRemaining;
+    private final LocalDRNArrayList drnsBuilder = new LocalDRNArrayList(2);
+    private final IntObjectHashMap<LocalNodeArrayList> bySlopRemaining;
 
-    private final LocalArrayList<Node> pooledNodeListAnchor = new LocalArrayList<>(2, NODE_ARRAY_CREATOR);
-    private LocalArrayList<Node> pooledNodeListHead = pooledNodeListAnchor;
-    private LocalArrayList<Node> pooledNodeListLastHead = null;
+    private final LocalNodeArrayList pooledNodeListAnchor = new LocalNodeArrayList(2);
+    private LocalNodeArrayList pooledNodeListHead = pooledNodeListAnchor;
+    private LocalNodeArrayList pooledNodeListLastHead = null;
 
-    private LocalArrayList<Node> getPooledNodeList() {
-      LocalArrayList<Node> ret = pooledNodeListHead;
+    private LocalNodeArrayList getPooledNodeList() {
+      LocalNodeArrayList ret = pooledNodeListHead;
       if (ret == null) {
-        ret = new LocalArrayList<>(2, NODE_ARRAY_CREATOR);
+        ret = new LocalNodeArrayList(2);
         pooledNodeListLastHead.trackNextRef = ret;
       } else {
         ret.clear();
@@ -723,7 +821,9 @@ public class PositionDeque implements Iterable<Spans> {
       } while ((drn = drn.prev) != anchor);
       this.drns = drnsBuilder.data;
       this.drnsSize = drnsBuilder.size;
-      Arrays.sort(this.drns, 0, this.drnsSize, END_POS_COMPARATOR); //TODO can we avoid doing this every time?
+      if (drnsSize > 1) {
+        Arrays.sort(this.drns, 0, this.drnsSize, END_POS_COMPARATOR); //TODO can we avoid doing this every time?
+      }
       return this;
     }
     
@@ -762,8 +862,8 @@ public class PositionDeque implements Iterable<Spans> {
       }
     }
 
-    private void addToBySlopRemaining(final IntObjectHashMap<LocalArrayList<Node>> bySlopRemaining, final Node node, final int totalSlopRemaining) {
-        LocalArrayList<Node> forSlopRemaining = bySlopRemaining.get(totalSlopRemaining);
+    private void addToBySlopRemaining(final IntObjectHashMap<LocalNodeArrayList> bySlopRemaining, final Node node, final int totalSlopRemaining) {
+        LocalNodeArrayList forSlopRemaining = bySlopRemaining.get(totalSlopRemaining);
         if (forSlopRemaining == null) {
           forSlopRemaining = getPooledNodeList();
           bySlopRemaining.put(totalSlopRemaining, forSlopRemaining);
@@ -777,8 +877,7 @@ public class PositionDeque implements Iterable<Spans> {
           if (node.outputPassId != passId) {
             node.outputPassId = passId;
             node.output = 0;
-            addToBySlopRemaining(bySlopRemaining, node, maxSlopRemainingToStart + slopRemainingToEnd);
-            return;
+            break;
           }
         case PER_POSITION:
         case FULL_DISTILLED_PER_POSITION:
@@ -788,12 +887,10 @@ public class PositionDeque implements Iterable<Spans> {
             if (idx < 0) {
               bySlopRemaining.put(totalSlopRemaining, null);
             }
-            break;
+            return;
           }
-        default:
-          addToBySlopRemaining(bySlopRemaining, node, maxSlopRemainingToStart + slopRemainingToEnd);
-          return;
       }
+      addToBySlopRemaining(bySlopRemaining, node, maxSlopRemainingToStart + slopRemainingToEnd);
     }
 
     private void populateBySlopRemainingFullDistilled(Node endNode) {
@@ -825,17 +922,17 @@ public class PositionDeque implements Iterable<Spans> {
     private int startPosition;
     private int endPosition;
     private final int twiceAllowedSlop;
-    private Iterator<IntObjectCursor<LocalArrayList<Node>>> entries;
+    private Iterator<IntObjectCursor<LocalNodeArrayList>> entries;
     private final ComboMode comboMode;
-    private final SpansEntryPerPosition spansEntry;
+    private final SpansEntry spansEntry;
 
     public WidthAtStartEndIter(int twiceAllowedSlop, ComboMode comboMode) {
       this.twiceAllowedSlop = twiceAllowedSlop;
       this.comboMode = comboMode;
-      this.spansEntry = new SpansEntryPerPosition(comboMode);
+      this.spansEntry = new SpansEntry(comboMode);
     }
 
-    public WidthAtStartEndIter init(int startPosition, int endPosition, Iterator<IntObjectCursor<LocalArrayList<Node>>> entries) {
+    public WidthAtStartEndIter init(int startPosition, int endPosition, Iterator<IntObjectCursor<LocalNodeArrayList>> entries) {
       this.startPosition = startPosition;
       this.endPosition = endPosition;
       this.entries = entries;
@@ -849,13 +946,13 @@ public class PositionDeque implements Iterable<Spans> {
 
     @Override
     public SpansEntry next() {
-      IntObjectCursor<LocalArrayList<Node>> e = entries.next();
+      IntObjectCursor<LocalNodeArrayList> e = entries.next();
       return spansEntry.init(startPosition, endPosition, e.value, twiceAllowedSlop - e.key);
     }
     
   }
   
-  private static final Comparator<Node> PHRASE_ORDER_COMPARATOR = new Comparator<Node>() {
+  static final Comparator<Node> PHRASE_ORDER_COMPARATOR = new Comparator<Node>() {
 
     @Override
     public int compare(Node o1, Node o2) {
@@ -863,66 +960,12 @@ public class PositionDeque implements Iterable<Spans> {
     }
   };
 
-  private static final class SpansEntryPerPosition extends SpansEntry {
-
-    private int startPosition;
-    private int endPosition;
-    private LocalArrayList<Node> backing;
-    private final ComboMode comboMode;
-
-    public SpansEntryPerPosition(ComboMode comboMode) {
-      this.comboMode = comboMode;
-    }
-
-    public SpansEntryPerPosition init(int startPosition, int endPosition, LocalArrayList<Node> backing, int width) {
-      super.init(width);
-      this.startPosition = startPosition;
-      this.endPosition = endPosition;
-      this.backing = backing;
-      if (backing != null) {
-        Arrays.sort(backing.data, 0, backing.size, PHRASE_ORDER_COMPARATOR);
-      }
-      return this;
-    }
-    
-    @Override
-    public int startPosition() {
-      return startPosition;
-    }
-
-    @Override
-    public int endPosition() {
-      return endPosition;
-    }
-
-    @Override
-    public void collect(SpanCollector collector) throws IOException {
-      if (backing != null) {
-        switch (comboMode) {
-          case FULL_DISTILLED_PER_START_POSITION: // we already know output.passId == passId
-          case PER_POSITION:
-          case FULL_DISTILLED_PER_POSITION:
-            for (final Node n : backing) {
-              n.output++;
-              n.collect(collector);
-            }
-            break;
-          default:
-            for (final Node n : backing) {
-              n.collect(collector);
-            }
-        }
-      }
-    }
-
-  }
-
   private final PerPositionIter perPositionIter;
   public Iterator<SpansEntry> perPosition(DLLReturnNode drn, final int twiceAllowedSlop, int startPosition, ComboMode comboMode) {
     return perPositionIter.init(drn, startPosition, passId);
   }
   
-  private static class FullPositionsIter implements Iterator<SpansEntry> {
+  private static final class FullPositionsIter implements Iterator<SpansEntry> {
 
     private final int length;
     private final int allowedSlop;
@@ -937,7 +980,7 @@ public class PositionDeque implements Iterable<Spans> {
     private DLLNode dn;
     private int remainingSlop;
     private boolean nextInitialized = false;
-    private final SpansEntryBase spansEntry;
+    private final SpansEntry spansEntry;
 
     public FullPositionsIter(int length, int allowedSlop, DLLReturnNode endPositionReturnNodeAnchor) {
       this.length = length;
@@ -948,7 +991,7 @@ public class PositionDeque implements Iterable<Spans> {
       this.state = new DLLNode[lastIndex];
       this.anchor = endPositionReturnNodeAnchor;
       this.initialDn = new DLLNode();
-      this.spansEntry = new SpansEntryBase(this.spansBuilder, this.lastIndex);
+      this.spansEntry = new SpansEntry(this.spansBuilder, this.lastIndex);
     }
 
     public FullPositionsIter init(DLLReturnNode drn) {
@@ -1021,54 +1064,89 @@ public class PositionDeque implements Iterable<Spans> {
 
   private final FullPositionsIter fullPositionsIter;
   
+  private final StackFrame[] blStack;
+  private final DeleteBacklinksStackFrame[] dbStack;
+
+  private static final class DeleteBacklinksStackFrame {
+    Node n;
+    SLLNode pn;
+    boolean pseudoReturn = false;
+    void preRecurse(Node n, SLLNode pn) {
+      this.n = n;
+      this.pn = pn;
+    }
+    SLLNode init(ComboMode comboMode) {
+      if (pseudoReturn) {
+        pseudoReturn = false;
+        return pn.next;
+      } else {
+        n.initialzedReverseLinks.remove();
+        n.initialzedReverseLinks = null;
+        if (n.phraseNext == null) {
+          return null;
+        } else {
+          switch (comboMode) {
+            case FULL_DISTILLED:
+            case FULL_DISTILLED_PER_POSITION:
+            case FULL_DISTILLED_PER_START_POSITION:
+              final long phraseScopeId = n.phraseScopeId;
+              final FullEndNodeLink anchor = n.endNodeLinks;
+              FullEndNodeLink endNodeLink = anchor.next;
+              do {
+                endNodeLink.endNode.associatedNodes.remove(phraseScopeId);
+              } while ((endNodeLink = endNodeLink.next) != anchor);
+              anchor.clear();
+              break;
+          }
+          n.maxSlopRemainingEndNodeLink.remove();
+          n.maxSlopRemainingEndNodeLink = null;
+          return n.phraseNext;
+        }
+      }
+    }
+  }
+
   /**
    * In preparation for the deletion of the specified Node n, delete links from subsequent phrase positions that refer
    * back to the specified Node. Recursively prune any subsequent node that *only* refers back to the specified Node.
    * @param n 
    */
-  private void deleteBacklinks(Node n) {
+  private void deleteBacklinks(final int initialPhraseIndex, final DeleteBacklinksStackFrame[] frames) {
     //System.err.println("delete backlinks to node "+n+"["+n.deque.phraseIndex+"]");
-    n.initialzedReverseLinks.remove();
-    n.initialzedReverseLinks = null;
-    if (n.phraseNext != null) {
-      switch (comboMode) {
-        case FULL_DISTILLED:
-        case FULL_DISTILLED_PER_POSITION:
-        case FULL_DISTILLED_PER_START_POSITION:
-          final long phraseScopeId = n.phraseScopeId;
-          final FullEndNodeLink anchor = n.endNodeLinks;
-          FullEndNodeLink endNodeLink = anchor.next;
-          do {
-            endNodeLink.endNode.associatedNodes.remove(phraseScopeId);
-          } while ((endNodeLink = endNodeLink.next) != anchor);
-          anchor.clear();
+    int localPhraseIndex = initialPhraseIndex;
+    DeleteBacklinksStackFrame f = frames[localPhraseIndex];
+    pseudoRecurse:
+    do {
+      Node n = f.n;
+      SLLNode pn = f.init(comboMode);
+      if (pn != null) {
+        do {
+          DLLNode dn = pn.node;
+          DLLNode ret = dn.remove();
+          if (ret == DLLNode.EMPTY_LIST) {
+            Node toRemove = dn.phraseNext;
+            toRemove.phrasePrev = null;
+            f.pn = pn;
+            f = frames[++localPhraseIndex];
+            f.preRecurse(toRemove, toRemove.phraseNext);
+            continue pseudoRecurse;
+          } else {
+            if (ret != null) {
+              dn.phraseNext.phrasePrev = ret;
+            }
+          }
+        } while ((pn = pn.next) != null);
       }
-      n.maxSlopRemainingEndNodeLink.remove();
-      n.maxSlopRemainingEndNodeLink = null;
-      SLLNode pn = n.phraseNext;
-      do {
-        DLLNode dn = pn.node;
-        Node linkFrom = dn.phraseNext;
-        //System.err.println(linkFrom+"["+linkFrom.deque.phraseIndex+"]=>"+n+"["+n.deque.phraseIndex+"]");
-        DLLNode ret = dn.remove();
-        if (ret == DLLNode.EMPTY_LIST) {
-          Node toRemove = dn.phraseNext;
-          toRemove.phrasePrev = null;
-          toRemove.lastPassPhrasePrev = null;
-          deleteBacklinks(toRemove);
-        } else {
-          if (ret != null) {
-            dn.phraseNext.phrasePrev = ret;
-          }
-          if (dn == dn.phraseNext.lastPassPhrasePrev) {
-            dn.phraseNext.lastPassPhrasePrev = dn.next;
-          }
-        }
-      } while ((pn = pn.next) != null);
-    }
-    if (n.validity == 0) {
-      n.dequePointer[0].enqueueForPoolReturn(n);
-    }
+      if (n.validity == 0) {
+        n.dequePointer[0].enqueueForPoolReturn(n);
+      }
+      if (localPhraseIndex == initialPhraseIndex) {
+        return;
+      } else {
+        f = frames[--localPhraseIndex];
+        f.pseudoReturn = true;
+      }
+    } while (true); // pseudoRecurse
   }
 
   private int passId = -1;
@@ -1082,21 +1160,33 @@ public class PositionDeque implements Iterable<Spans> {
    * @return
    * @throws IOException 
    */
-  public DLLReturnNode buildLattice(int minStart, int remainingSlopToCaller, ComboMode comboMode) throws IOException {
+  public DLLReturnNode buildLattice(int minStart, int remainingSlopToCaller, ComboMode comboMode, boolean loop) throws IOException {
     final DLLReturnNode anchor = returned.anchor;
     DLLReturnNode drn = returned.next;
     int drnStartPos = drn.node == null ? -1 : drn.node.startPosition();
     do {
-      driver.reset(-1, minStart);
+      //driver.reset(-1, minStart);
 //    if (last.returned != null) {
 //      printDLLReturnNode("A", last.returned);
 //    }
 //    long start=System.currentTimeMillis();
       root.maxSlopToCaller = -1;
       int minEnd = Math.min(1, driver.next.getMinStart() - allowedSlop);
-      buildLattice(root, minStart, minStart, minStart + 1, minEnd, remainingSlopToCaller, comboMode, ++passId);
+      final int ret;
+      if (loop) {
+        blStack[0].initArgs(root, minStart, minStart, minStart + 1, minEnd, remainingSlopToCaller);
+        ret = buildLatticeLoop(allowedSlop, comboMode, greedyReturn, ++passId, blStack, root);
+      } else {
+        ret = buildLattice(root, minStart, minStart, minStart + 1, minEnd, remainingSlopToCaller, comboMode, ++passId);
+      }
       int startPosition;
-      if (drn != returned.next) {
+      if (ret == Integer.MAX_VALUE) {
+        if (greedyReturn) {
+          last.returned.setGreedyWidth(Integer.MAX_VALUE);
+        }
+        last.returned.setCurrentStart(Spans.NO_MORE_POSITIONS);
+        return last.returned;
+      } else if (greedyReturn ? last.returned.setGreedyWidth(ret) : drn != returned.next) {
         break;
       } else {
         //revisitPruneBacklinks();
@@ -1116,23 +1206,28 @@ public class PositionDeque implements Iterable<Spans> {
 //    System.err.println("buildLattice="+(System.currentTimeMillis() - start));
 //    start=System.currentTimeMillis();
 //    printDLLReturnNode("B", last.returned);
-    if (drn != anchor) {
-      drn.prev.next = returned.anchor; // truncate
-      returned.anchor.prev = drn.prev;
-      do {
-        deleteBacklinks(drn.node);
-      } while ((drn = drn.next) != anchor);
-    }
+    if (!greedyReturn) {
+      if (drn != anchor) {
+        drn.prev.next = returned.anchor; // truncate
+        returned.anchor.prev = drn.prev;
+        do {
+          Node n = drn.node;
+          assert comboMode == this.comboMode;
+          dbStack[0].preRecurse(n, n.phraseNext);
+          deleteBacklinks(0, dbStack);
+        } while ((drn = drn.next) != anchor);
+      }
 //    System.err.println("deleteBacklinks="+(System.currentTimeMillis() - start));
 //    start=System.currentTimeMillis();
 //    printDLLReturnNode("C", last.returned);
-    revisitPruneBacklinks();
+      revisitPruneBacklinks(dbStack);
 //    System.err.println("revisit="+(System.currentTimeMillis() - start));
 //    printDLLReturnNode("D", last.returned);
-    PositionDeque pd = this;
-    do {
-      pd.returnNodesToPool();
-    } while ((pd = pd.next) != null);
+      PositionDeque pd = this;
+      do {
+        pd.returnNodesToPool();
+      } while ((pd = pd.next) != null);
+    }
     last.returned.setCurrentStart(minStart);
     return last.returned;
   }
@@ -1249,7 +1344,7 @@ public class PositionDeque implements Iterable<Spans> {
    * Recursively adjust preliminary cached slop-to-start/end based on complete/current path information;
    * recursively prune nodes that no longer have a valid path to start/end.
    */
-  private void revisitPruneBacklinks() {
+  private void revisitPruneBacklinks(final DeleteBacklinksStackFrame[] frames) {
     PositionDeque pd = this.next;
     do {
       RevisitNode r = pd.revisit;
@@ -1274,14 +1369,12 @@ public class PositionDeque implements Iterable<Spans> {
                 DLLNode ret = dn.remove();
                 if (ret == DLLNode.EMPTY_LIST) {
                   nextNode.phrasePrev = null;
-                  nextNode.lastPassPhrasePrev = null;
-                  deleteBacklinks(nextNode);
+                  final int localPhraseIndex = nextNode.phraseIndex;
+                  frames[localPhraseIndex].preRecurse(nextNode, nextNode.phraseNext);
+                  deleteBacklinks(localPhraseIndex, frames);
                 } else {
                   if (ret != null) {
                     nextNode.phrasePrev = ret;
-                  }
-                  if (dn == nextNode.lastPassPhrasePrev) {
-                    nextNode.lastPassPhrasePrev = dn.next;
                   }
                 }
                 //System.err.println("\tremove node");
@@ -1327,6 +1420,7 @@ public class PositionDeque implements Iterable<Spans> {
   }
   
   private final Node root = new Node();
+  static final boolean ENABLE_GREEDY_RETURN = true;
   
   private final boolean supportVariableTermSpansLength;
   
@@ -1346,7 +1440,7 @@ public class PositionDeque implements Iterable<Spans> {
    * @return
    * @throws IOException 
    */
-  private boolean buildLattice(final Node caller, final int hardMinStart, final int softMinStart, final int startCeiling, final int minEnd, final int remainingSlopToCaller, final ComboMode comboMode, final int passId) throws IOException {
+  private int buildLattice(final Node caller, final int hardMinStart, final int softMinStart, final int startCeiling, final int minEnd, final int remainingSlopToCaller, final ComboMode comboMode, final int passId) throws IOException {
     //System.err.println("here["+phraseIndex+"]!! "+caller+", "+softMinStart+", "+startCeiling+", "+remainingSlopToCaller+" ("+lstToString()+")");
     final int previousMaxSlopToCaller = caller.maxSlopToCaller;
     if (remainingSlopToCaller > caller.maxSlopToCaller) {
@@ -1360,7 +1454,7 @@ public class PositionDeque implements Iterable<Spans> {
       Node nextNode = getLastNode();
       int updateSealedToThreshold = Integer.MIN_VALUE;
       int updateSealedTo = nextNode.index;
-      boolean keepUpdatingSealedTo = true;
+      boolean keepUpdatingSealedTo = !greedyReturn;
       loopAtLevel:
       do {
         final int remainingSlop = remainingSlopToCaller - (start - softMinStart);
@@ -1384,6 +1478,9 @@ public class PositionDeque implements Iterable<Spans> {
           }
           break;
         } else if (next == null) {
+          if (greedyReturn) {
+            return remainingSlop;
+          }
           if (keepUpdatingSealedTo) {
             updateSealedTo = nextNode.index;
             updateSealedToThreshold = 0;
@@ -1420,7 +1517,10 @@ public class PositionDeque implements Iterable<Spans> {
                 int nextMinEnd = next.next == null ? -1 : Math.min(nextHardMinStart + 1, next.next.driver.getMinStart());
                 next.driver.reset(nextNode.sealedTo, -1, nextSoftMinStart);
                 //System.err.println("inspecting from "+nextNode+"["+nextNode.deque.phraseIndex+"] "+nextSoftMinStart+", "+next.driver.startPosition()+", !"+nextNode.sealedThreshold+">=<"+remainingSlop);
-                next.buildLattice(nextNode, nextHardMinStart, nextSoftMinStart, nextSoftMinStart + remainingSlop + 1, nextMinEnd, remainingSlop, comboMode, passId);
+                int ret = next.buildLattice(nextNode, nextHardMinStart, nextSoftMinStart, nextSoftMinStart + remainingSlop + 1, nextMinEnd, remainingSlop, comboMode, passId);
+                if (ENABLE_GREEDY_RETURN && ret > Integer.MIN_VALUE + 1) {
+                  return ret;
+                }
                 remainingSlopToEnd = nextNode.maxSlopRemainingToEnd;
                 //System.err.println("rste="+remainingSlopToEnd+ " for "+nextNode+"["+nextNode.deque.phraseIndex+"]");
               }
@@ -1432,7 +1532,10 @@ public class PositionDeque implements Iterable<Spans> {
               int nextMinEnd = next.next == null ? -1 : Math.min(nextHardMinStart + 1, next.next.driver.getMinStart());
               next.driver.reset(-1, nextSoftMinStart);
               //System.err.println("not cached; inspecting from " + nextNode + "[" + nextNode.deque.phraseIndex + "] " + softMinStart + ", " + next.driver.startPosition());
-              next.buildLattice(nextNode, nextHardMinStart, nextSoftMinStart, nextSoftMinStart + remainingSlop + 1, nextMinEnd, remainingSlop, comboMode, passId);
+              int ret = next.buildLattice(nextNode, nextHardMinStart, nextSoftMinStart, nextSoftMinStart + remainingSlop + 1, nextMinEnd, remainingSlop, comboMode, passId);
+              if (ENABLE_GREEDY_RETURN && ret > Integer.MIN_VALUE + 1) {
+                return ret;
+              }
               remainingSlopToEnd = nextNode.maxSlopRemainingToEnd;
               //System.err.println("rste=" + remainingSlopToEnd + " for " + nextNode + "[" + nextNode.deque.phraseIndex + "]");
               break;
@@ -1536,78 +1639,80 @@ public class PositionDeque implements Iterable<Spans> {
           //System.err.println("set2 updateSealedToThreshold="+updateSealedToThreshold+", "+updateSealedTo+", "+nextNode.index+", "+nextNode);
         }
         if (comboMode == ComboMode.GREEDY_END_POSITION && // only want one match
-            ((next == null && remainingSlop >= 0) || // reached end within slop constraints
+            ((next == null && (remainingSlop >= 0 || assign(start = ~start))) || // reached end irrespective of slop constraints
             remainingSlop + maxSlopRemainingToPhraseEnd >= allowedSlop)) { // have cached path to end within slop constraints
           break loopAtLevel;
-        } else if ((start = driver.nextMatch(hardMinStart, softMinStart, startCeiling, minEnd)) < 0) {
-          // exhasted further matches, for now
-          break loopAtLevel;
-        } else if (prev == null) {
-          nextNode = getLastNode();
         } else {
-          switch (comboMode) {
-            case FULL:
-            case FULL_DISTILLED:
-            case FULL_DISTILLED_PER_POSITION:
-            case FULL_DISTILLED_PER_START_POSITION:
-            case PER_POSITION_PER_START_POSITION:
-              nextNode = getLastNode();
-              break;
-            default:
-              final boolean perPosition = comboMode == ComboMode.PER_POSITION;
-              if (next == null) {
-                // progress until you find position of different end
-                final int extantEnd = nextNode.endPosition();
-                nextNode = getLastNode();
-                do {
-                  if ((perPosition && nextNode.output == 0) || nextNode.endPosition() != extantEnd) {
-                    continue loopAtLevel;
+          if (prev != null) {
+            switch (comboMode) {
+              case FULL:
+              case FULL_DISTILLED:
+              case FULL_DISTILLED_PER_POSITION:
+              case FULL_DISTILLED_PER_START_POSITION:
+              case PER_POSITION_PER_START_POSITION:
+                break;
+              default:
+                final boolean perPosition = comboMode == ComboMode.PER_POSITION;
+                if (next == null) {
+                  // progress until you find position of different end
+                  final int extantEnd = nextNode.endPosition();
+                  while ((start = driver.nextMatch(hardMinStart, softMinStart, startCeiling, minEnd)) >= 0 && assign(0, nextNode = getLastNode(), true)) {
+                    if ((perPosition && nextNode.output == 0) || nextNode.endPosition() != extantEnd) {
+                      continue loopAtLevel;
+                    }
                   }
-                } while ((start = driver.nextMatch(hardMinStart, softMinStart, startCeiling, minEnd)) >= 0 && assign(0, nextNode = getLastNode(), true));
-              } else {
-                final int extantEnd = nextNode.endPosition();
-                final int extantWidth = extantEnd - nextNode.startPosition();
-                int checkFor = 0;
-                if (perPosition || (checkFor = checkForIncreasedMatchLength(extantWidth, leastSloppyPathToPhraseEnd == null)) != 0) {
-                  final int decreasedEndStartCeiling = extantEnd - 1;
-                  // progress until you find position of decreased end or different width
-                  nextNode = getLastNode();
-                  checkLoop:
-                  do {
-                    if (perPosition) {
-                      if (nextNode.output == 0) {
-                        continue loopAtLevel;
-                      }
-                    } else {
-                      switch (checkFor) {
-                        default:
-                          throw new AssertionError("this should never happen");
-                        case DECREASED_END_POSITION:
-                          if (start >= decreasedEndStartCeiling) {
-                            break checkLoop;
-                          } else if (nextNode.endPosition() < extantEnd) {
-                            continue loopAtLevel;
-                          }
-                          break;
-                        case INCREASED_WIDTH:
-                          if (nextNode.endPosition() - start > extantWidth) {
-                            continue loopAtLevel;
-                          }
-                          break;
-                        case DECREASED_END_POSITION | INCREASED_WIDTH:
-                          final int nextEnd = nextNode.endPosition();
-                          if (nextEnd < extantEnd || nextEnd - start > extantWidth) {
-                            continue loopAtLevel;
-                          } else if (start >= decreasedEndStartCeiling) {
-                            checkFor ^= DECREASED_END_POSITION;
-                          }
-                          break;
+                } else {
+                  final int extantEnd = nextNode.endPosition();
+                  final int extantWidth = extantEnd - nextNode.startPosition();
+                  int checkFor = 0;
+                  if (!perPosition && (checkFor = checkForIncreasedMatchLength(extantWidth, leastSloppyPathToPhraseEnd == null, startCeiling - softMinStart > 1)) == 0) {
+                    start = ~start;
+                  } else {
+                    final int decreasedEndStartCeiling = extantEnd - 1;
+                    // progress until you find position of decreased end or different width
+                    checkLoop:
+                    while ((start = driver.nextMatch(hardMinStart, softMinStart, startCeiling, minEnd)) >= 0 && PositionDeque.assign(0, nextNode = getLastNode(), true)) {
+                      if (perPosition) {
+                        if (nextNode.output == 0) {
+                          continue loopAtLevel;
+                        }
+                      } else {
+                        switch (checkFor) {
+                          default:
+                            throw new AssertionError("this should never happen");
+                          case PositionDeque.DECREASED_END_POSITION:
+                            if (start >= decreasedEndStartCeiling) {
+                              break checkLoop;
+                            } else if (nextNode.endPosition() < extantEnd) {
+                              continue loopAtLevel;
+                            }
+                            break;
+                          case PositionDeque.INCREASED_WIDTH:
+                            if (nextNode.endPosition() - start > extantWidth) {
+                              continue loopAtLevel;
+                            }
+                            break;
+                          case PositionDeque.DECREASED_END_POSITION | PositionDeque.INCREASED_WIDTH:
+                            final int nextEnd = nextNode.endPosition();
+                            if (nextEnd < extantEnd || nextEnd - start > extantWidth) {
+                              continue loopAtLevel;
+                            } else if (start >= decreasedEndStartCeiling) {
+                              checkFor ^= PositionDeque.DECREASED_END_POSITION;
+                            }
+                            break;
+                        }
                       }
                     }
-                  } while ((start = driver.nextMatch(hardMinStart, softMinStart, startCeiling, minEnd)) >= 0 && assign(0, nextNode = getLastNode(), true));
+                  }
                 }
-              }
-              break loopAtLevel;
+                break loopAtLevel;
+            }
+          }
+          if ((start = driver.nextMatch(hardMinStart, softMinStart, startCeiling, minEnd)) < 0) {
+            // exhasted further matches, for now
+            break loopAtLevel;
+          } else {
+            nextNode = getLastNode();
           }
         }
       } while (true);
@@ -1642,14 +1747,344 @@ public class PositionDeque implements Iterable<Spans> {
           //System.err.println("initialize sealedThreshold2 "+caller+"["+caller.deque.phraseIndex+"]="+caller.sealedThreshold+", "+caller.maxSlopRemainingToEnd);
         }
       }
-      return true;
+      return Integer.MIN_VALUE;
     }
     //System.err.println("RETURN "+maxSlopRemainingToPhraseEnd+"(/"+caller.maxSlopRemainingToEnd+") for "+caller+" via "+leastSloppyPathToPhraseEnd+" (phraseIndex="+(caller.deque == null ? null : caller.deque.phraseIndex)+")");
-    return false;
+    return Integer.MIN_VALUE;
   }
 
+  private static boolean assign(int val) {
+    return true;
+  }
+
+  private static int buildLatticeLoop(final int allowedSlop, final ComboMode comboMode, final boolean greedyReturn, final int passId, final StackFrame[] frames, final Node root) throws IOException {
+    int phraseIndex = 0;
+    boolean hasMatch = false;
+    StackFrame f = frames[phraseIndex];
+    pseudoRecurse:
+    do {
+      PositionDeque d = f.d;
+      if (f.initAlways()) {
+        f.init();
+        loopAtLevel:
+        do {
+          if (f.notPseudoReturn()) {
+            f.remainingSlop = f.remainingSlopToCaller - (f.start - f.softMinStart);
+            //System.err.println("start[" + phraseIndex + "]: " + start + " (?= " + nextNode.startPosition+"(=>" + nextNode.endPosition+", remainingSlop="+remainingSlop+"))");
+            if (f.remainingSlop < 0) {
+              // we can't get *to* nextNode
+              if (allowedSlop + f.remainingSlop < 0) {
+                if (f.keepUpdatingSealedTo) {
+                  f.updateSealedTo = f.nextNode.index;
+                }
+              } else if (f.remainingSlop > f.updateSealedToThreshold) {
+                if (f.keepUpdatingSealedTo) {
+                  f.keepUpdatingSealedTo = false; // we will need to inspect this again.
+                  f.updateSealedTo = f.nextNode.index;
+                }
+                f.updateSealedToThreshold = f.remainingSlop;
+                //System.err.println("set1 updateSealedToThreshold="+updateSealedToThreshold+", "+updateSealedTo+", "+nextNode.index+", "+nextNode);
+              }
+              break;
+            } else if (d.next == null) {
+              if (greedyReturn) {
+                return f.remainingSlop;
+              }
+              if (f.keepUpdatingSealedTo) {
+                f.updateSealedTo = f.nextNode.index;
+                f.updateSealedToThreshold = 0;
+                //System.err.println("set4 updateSealedToThreshold="+updateSealedToThreshold+", "+updateSealedTo+", "+nextNode.index+", "+nextNode);
+              }
+              f.revisitFrom = null;
+              //System.err.println("got 1 for " + nextNode+" initialize?="+(nextNode.initialzedReverseLinks == null));
+              if (f.nextNode.initialzedReverseLinks == null) {
+                f.nextNode.maxSlopRemainingToEnd = allowedSlop;
+                f.nextNode.maxSlopRemainingEndNodeLink = DLLEndNodeLink.newInstance(f.nextNode);
+                f.nextNode.initialzedReverseLinks = d.returned.add(f.nextNode);
+              }
+              f.remainingSlopToEnd = allowedSlop;
+              // the *only* path
+            } else {
+              switch (f.nextNode.sealed) {
+                case SEALED:
+                  //System.err.println("got 2 at " + nextNode+"["+nextNode.deque.phraseIndex+"]");
+                  // nothing will change
+                  f.revisitFrom = f.nextNode.phraseNext;
+                  f.remainingSlopToEnd = f.nextNode.maxSlopRemainingToEnd;
+                  break;
+                case INITIALIZED:
+                  //System.err.println("\t remainingSlop="+remainingSlop+", sealedThreshold="+nextNode.sealedThreshold+" maxSlopToEnd="+nextNode.maxSlopRemainingToEnd);
+                  if (f.remainingSlop < f.nextNode.sealedThreshold) {
+                    // nothing will change
+                    f.revisitFrom = f.nextNode.phraseNext;
+                    f.remainingSlopToEnd = f.nextNode.maxSlopRemainingToEnd;
+                    //System.err.println("got 3 at " + nextNode+"["+nextNode.deque.phraseIndex+"] ("+remainingSlopToEnd+")");
+                  } else {
+                    f.revisitFrom = f.nextNode.phraseNext;
+                    int nextHardMinStart = Math.min(d.driver.getMinEnd(), d.driver.getMinStart() + 2);
+                    int nextSoftMinStart = f.nextNode.endPosition();
+                    int nextMinEnd = d.next.next == null ? -1 : Math.min(nextHardMinStart + 1, d.next.next.driver.getMinStart());
+                    d.next.driver.reset(f.nextNode.sealedTo, -1, nextSoftMinStart);
+                    //System.err.println("inspecting from "+nextNode+"["+nextNode.deque.phraseIndex+"] "+nextSoftMinStart+", "+next.driver.startPosition()+", !"+nextNode.sealedThreshold+">=<"+remainingSlop);
+                    StackFrame rf = frames[++phraseIndex];
+                    rf.initArgs(f.nextNode, nextHardMinStart, nextSoftMinStart, nextSoftMinStart + f.remainingSlop + 1, nextMinEnd, f.remainingSlop);
+                    f = rf;
+                    continue pseudoRecurse;
+                    //System.err.println("rste="+remainingSlopToEnd+ " for "+nextNode+"["+nextNode.deque.phraseIndex+"]");
+                  }
+                  break;
+                case NONE:
+                  f.revisitFrom = null;
+                  int nextHardMinStart = Math.min(d.driver.getMinEnd(), d.driver.getMinStart() + 2);
+                  int nextSoftMinStart = f.nextNode.endPosition();
+                  int nextMinEnd = d.next.next == null ? -1 : Math.min(nextHardMinStart + 1, d.next.next.driver.getMinStart());
+                  d.next.driver.reset(-1, nextSoftMinStart);
+                  //System.err.println("not cached; inspecting from " + nextNode + "[" + nextNode.deque.phraseIndex + "] " + softMinStart + ", " + next.driver.startPosition());
+                  StackFrame rf = frames[++phraseIndex];
+                  rf.initArgs(f.nextNode, nextHardMinStart, nextSoftMinStart, nextSoftMinStart + f.remainingSlop + 1, nextMinEnd, f.remainingSlop);
+                  f = rf;
+                  continue pseudoRecurse;
+                //System.err.println("rste=" + remainingSlopToEnd + " for " + nextNode + "[" + nextNode.deque.phraseIndex + "]");
+                default:
+                  throw new AssertionError();
+              }
+            }
+          }
+          if (f.remainingSlopToEnd >= 0) {
+            // we *can* get to phrase end via this route
+            if (!hasMatch) {
+              hasMatch = true;
+            }
+            if (f.keepUpdatingSealedTo) {
+              f.updateSealedTo = f.nextNode.index;
+              if (f.nextNode.sealed == Node.SlopStatus.SEALED) {
+                f.updateSealedToThreshold = 0;
+              } else {
+                // although we can currently get to end via this node, with less slop more paths may become available
+                f.updateSealedToThreshold = -1; // even slightest bit more slop could result in more matches.
+                f.keepUpdatingSealedTo = false;
+              }
+              //System.err.println("set3 updateSealedToThreshold=" + updateSealedToThreshold + ", " + updateSealedTo + ", " + nextNode.index + ", " + nextNode);
+            }
+            if (f.remainingSlop > f.nextNode.maxSlopRemainingToStart) {
+              f.nextNode.maxSlopRemainingToStart = f.remainingSlop;
+              f.nextNode.maxSlopRemainingPhrasePrev = f.caller;
+            }
+            final int gapFromCallerToNext = f.start - f.softMinStart;
+            f.maxSlopRemainingCandidate = f.remainingSlopToEnd - gapFromCallerToNext;
+            SLLNode linkFromCaller = null;
+            if (f.previousMaxSlopToCaller + f.maxSlopRemainingCandidate < allowedSlop) {
+              linkFromCaller = initNodeLinks(f.caller, f.nextNode, d.returned, f.remainingSlop, passId, comboMode);
+            } else {
+              // we have probably already created a link between caller and nextNode
+              switch (comboMode) {
+                default:
+                  if (f.revisitFrom == null) {
+                    break;
+                  }
+                case FULL_DISTILLED:
+                case FULL_DISTILLED_PER_POSITION:
+                case FULL_DISTILLED_PER_START_POSITION:
+                  linkFromCaller = f.caller.phraseNext;
+                  while (linkFromCaller.node.phraseNext != f.nextNode) {
+                    linkFromCaller = linkFromCaller.next;
+                    if (linkFromCaller == null) {
+                      throw new AssertionError("this shouldn't happen, but uncomment below 2 lines if it does");
+                      //                    linkFromCaller = initNodeLinks(caller, nextNode, returned, remainingSlop, passId, comboMode);
+                      //                    break;
+                    }
+                  }
+              }
+            }
+            if (f.revisitFrom != null) {
+              d.revisit.add(linkFromCaller, f.revisitFrom, passId);
+            } else if (f.nextNode.initialzedReverseLinks == null) {
+              f.nextNode.initialzedReverseLinks = d.returned.add(f.nextNode);
+            }
+            if (f.caller != root) {
+              switch (comboMode) {
+                case FULL_DISTILLED:
+                case FULL_DISTILLED_PER_POSITION:
+                case FULL_DISTILLED_PER_START_POSITION:
+                  if (f.nextNode.associatedNodes != null) {
+                    if (f.remainingSlopToCaller - gapFromCallerToNext <= allowedSlop) {
+                      d.associateWithEndNode(f.caller, f.nextNode, allowedSlop - gapFromCallerToNext);
+                    }
+                  } else {
+                    FullEndNodeLink endNodeLink;
+                    if (linkFromCaller.revisitEndNode != null) {
+                      endNodeLink = linkFromCaller.revisitEndNode;
+                    } else {
+                      endNodeLink = f.nextNode.endNodeLinks.prev;
+                    }
+                    FullEndNodeLink revisitFromEndNode = null;
+                    final FullEndNodeLink anchor = endNodeLink.anchor;
+                    do {
+                      int remainingSlopCandidate = endNodeLink.remainingSlopToEnd - gapFromCallerToNext;
+                      if (f.remainingSlopToCaller + remainingSlopCandidate >= allowedSlop) {
+                        d.associateWithEndNode(f.caller, endNodeLink.endNode, remainingSlopCandidate);
+                      } else if (revisitFromEndNode == null && remainingSlopCandidate >= 0) {
+                        revisitFromEndNode = endNodeLink;
+                      }
+                    } while ((endNodeLink = endNodeLink.prev) != anchor);
+                    linkFromCaller.revisitEndNode = revisitFromEndNode;
+                  }
+              }
+            }
+            if (f.leastSloppyPathToPhraseEnd == null || f.maxSlopRemainingCandidate > f.maxSlopRemainingToPhraseEnd) {
+              f.leastSloppyPathToPhraseEnd = f.nextNode;
+              f.maxSlopRemainingToPhraseEnd = f.maxSlopRemainingCandidate;
+              f.maxSlopRemainingEndNode = f.nextNode.maxSlopRemainingEndNodeLink.endNode;
+            }
+          } else if (f.keepUpdatingSealedTo) {
+            f.updateSealedTo = f.nextNode.index;
+            if (f.nextNode.sealed == Node.SlopStatus.SEALED) {
+              // we will never be able to get to the end via this node, and may cache through this point
+              f.updateSealedToThreshold = 0;
+            } else {
+              // we cannot currently get to the end via this node, but might be able to later, and can cache up to this point
+              f.updateSealedToThreshold = -1; // even slightest bit more slop could result in a match.
+              f.keepUpdatingSealedTo = false;
+            }
+            //System.err.println("set2 updateSealedToThreshold="+updateSealedToThreshold+", "+updateSealedTo+", "+nextNode.index+", "+nextNode);
+          }
+          if (comboMode == ComboMode.GREEDY_END_POSITION && // only want one match
+              ((d.next == null && (f.remainingSlop >= 0 || assign(f.start = ~f.start))) || // reached end irrespective of slop constraints
+              f.remainingSlop + f.maxSlopRemainingToPhraseEnd >= allowedSlop)) { // have cached path to end within slop constraints
+            break loopAtLevel;
+          } else {
+            if (d.prev != null || comboMode == ComboMode.GREEDY_END_POSITION) {
+              switch (comboMode) {
+                case FULL:
+                case FULL_DISTILLED:
+                case FULL_DISTILLED_PER_POSITION:
+                case FULL_DISTILLED_PER_START_POSITION:
+                case PER_POSITION_PER_START_POSITION:
+                  break;
+                default:
+                  final boolean perPosition = comboMode == ComboMode.PER_POSITION;
+                  if (d.next == null) {
+                    // progress until you find position of different end
+                    final int extantEnd = f.nextNode.endPosition();
+                    while ((f.start = d.driver.nextMatch(f.hardMinStart, f.softMinStart, f.startCeiling, f.minEnd)) >= 0 && assign(0, f.nextNode = d.getLastNode(), true)) {
+                      if ((perPosition && f.nextNode.output == 0) || f.nextNode.endPosition() != extantEnd) {
+                        continue loopAtLevel;
+                      }
+                    }
+                  } else {
+                    final int extantEnd = f.nextNode.endPosition();
+                    final int extantWidth = extantEnd - f.nextNode.startPosition();
+                    int checkFor = 0;
+                    if (!perPosition && (checkFor = d.checkForIncreasedMatchLength(extantWidth, f.leastSloppyPathToPhraseEnd == null, f.startCeiling - f.softMinStart > 1)) == 0) {
+                      f.start = ~f.start;
+                    } else {
+                      final int decreasedEndStartCeiling = extantEnd - 1;
+                      // progress until you find position of decreased end or different width
+                      checkLoop:
+                      while ((f.start = d.driver.nextMatch(f.hardMinStart, f.softMinStart, f.startCeiling, f.minEnd)) >= 0 && PositionDeque.assign(0, f.nextNode = d.getLastNode(), true)) {
+                        if (perPosition) {
+                          if (f.nextNode.output == 0) {
+                            continue loopAtLevel;
+                          }
+                        } else {
+                          switch (checkFor) {
+                            default:
+                              throw new AssertionError("this should never happen");
+                            case PositionDeque.DECREASED_END_POSITION:
+                              if (f.start >= decreasedEndStartCeiling) {
+                                break checkLoop;
+                              } else if (f.nextNode.endPosition() < extantEnd) {
+                                continue loopAtLevel;
+                              }
+                              break;
+                            case PositionDeque.INCREASED_WIDTH:
+                              if (f.nextNode.endPosition() - f.start > extantWidth) {
+                                continue loopAtLevel;
+                              }
+                              break;
+                            case PositionDeque.DECREASED_END_POSITION | PositionDeque.INCREASED_WIDTH:
+                              final int nextEnd = f.nextNode.endPosition();
+                              if (nextEnd < extantEnd || nextEnd - f.start > extantWidth) {
+                                continue loopAtLevel;
+                              } else if (f.start >= decreasedEndStartCeiling) {
+                                checkFor ^= PositionDeque.DECREASED_END_POSITION;
+                              }
+                              break;
+                          }
+                        }
+                      }
+                    }
+                  }
+                  break loopAtLevel;
+              }
+            }
+            if ((f.start = d.driver.nextMatch(f.hardMinStart, f.softMinStart, f.startCeiling, f.minEnd)) < 0) {
+              // exhasted further matches, for now
+              break loopAtLevel;
+            } else {
+              f.nextNode = d.getLastNode();
+            }
+          }
+        } while (true);
+        if (f.maxSlopRemainingToPhraseEnd > f.caller.maxSlopRemainingToEnd) {
+          f.caller.maxSlopRemainingToEnd = f.maxSlopRemainingToPhraseEnd;
+          f.caller.maxSlopRemainingPhraseNext = f.leastSloppyPathToPhraseEnd;
+          if (f.caller != root) {
+            DLLEndNodeLink extantEndNodeLink = f.caller.maxSlopRemainingEndNodeLink;
+            if (extantEndNodeLink == null) {
+              f.caller.maxSlopRemainingEndNodeLink = f.maxSlopRemainingEndNode.maxSlopRemainingEndNodeLink.add(f.caller);
+            } else if (extantEndNodeLink.endNode != f.maxSlopRemainingEndNode) {
+              extantEndNodeLink.remove();
+              f.caller.maxSlopRemainingEndNodeLink = f.maxSlopRemainingEndNode.maxSlopRemainingEndNodeLink.add(f.caller);
+            }
+          }
+        }
+        if (f.caller != root) {
+          int overshot;
+          if (f.updateSealedToThreshold < 0) {
+            f.caller.sealedTo = f.updateSealedTo;
+            f.caller.sealed = Node.SlopStatus.INITIALIZED;
+            assert f.updateSealedToThreshold != Integer.MIN_VALUE;
+            f.caller.sealedThreshold = f.updateSealedToThreshold == Integer.MIN_VALUE ? f.remainingSlopToCaller : f.remainingSlopToCaller - f.updateSealedToThreshold;
+            //System.err.println("initialize sealedThreshold1 "+caller+"["+caller.deque.phraseIndex+"]="+caller.sealedThreshold+", "+caller.maxSlopRemainingToEnd);
+          } else if ((overshot = ~f.start - f.softMinStart) > allowedSlop) {
+            f.caller.sealed = Node.SlopStatus.SEALED; // final slop-to-end has been calculated for the calling node.
+            //System.err.println("initialize sealedThreshold3 "+caller+"["+caller.deque.phraseIndex+"], "+caller.maxSlopRemainingToEnd);
+          } else {
+            f.caller.sealedTo = f.nextNode.index + 1;
+            f.caller.sealed = Node.SlopStatus.INITIALIZED;
+            f.caller.sealedThreshold = f.remainingSlopToCaller + overshot;
+            //System.err.println("initialize sealedThreshold2 "+caller+"["+caller.deque.phraseIndex+"]="+caller.sealedThreshold+", "+caller.maxSlopRemainingToEnd);
+          }
+        }
+      } else if (f.start == Integer.MIN_VALUE && !hasMatch) {
+        // we have to check d.isEmpty because stored spans could still be used for other matches,
+        // and we have to check d.driver.startPosition() because f.start could have been set by lookahead,
+        // without actually advancing the backing spans.
+        if ((d.isEmpty() && d.driver.startPosition() == Spans.NO_MORE_POSITIONS) || !mayStillMatchByShrink(phraseIndex, frames)) {
+          return Integer.MAX_VALUE;
+        }
+      }
+      //System.err.println("RETURN "+maxSlopRemainingToPhraseEnd+"(/"+caller.maxSlopRemainingToEnd+") for "+caller+" via "+leastSloppyPathToPhraseEnd+" (phraseIndex="+(caller.deque == null ? null : caller.deque.phraseIndex)+")");
+      if (phraseIndex == 0) {
+        return comboMode != ComboMode.GREEDY_END_POSITION ? -1 : f.remainingSlopToEnd;
+      } else {
+        f = frames[--phraseIndex];
+        f.pseudoReturn = true;
+        continue pseudoRecurse;
+      }
+    } while (true); // pseudoRecurse
+  }
   private static final int DECREASED_END_POSITION = 1, INCREASED_WIDTH = 1 << 1;
 
+  private static boolean mayStillMatchByShrink(int i, StackFrame[] frames) throws IOException {
+    while (i-- > 0) {
+      if (frames[i].d.driver.endPositionDecreaseCeiling() > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
   /**
    * Based on indexed data (if available), determine whether it is possible for subsequent positions to expose new
    * match possibilities (and thus, whether to continue advancing in search of a(nother) match). Determine based on
@@ -1659,12 +2094,16 @@ public class PositionDeque implements Iterable<Spans> {
    * @param noMatchYet
    * @return 
    */
-  private int checkForIncreasedMatchLength(int extantWidth, boolean noMatchYet) {
+  private int checkForIncreasedMatchLength(int extantWidth, boolean noMatchYet, boolean checkForDecreasedEnd) throws IOException {
     if (comboMode == ComboMode.GREEDY_END_POSITION && !noMatchYet) {
       return 0;
     } else if (driver.lookaheadBacking == null) {
       // positionLengthCeiling lookahead not supported, fallback to default
-      return (driver.variablePositionLength || supportVariableTermSpansLength || noMatchYet) ? DECREASED_END_POSITION | INCREASED_WIDTH : 0;
+      if (driver.variablePositionLength || supportVariableTermSpansLength || noMatchYet) {
+        return checkForDecreasedEnd ? DECREASED_END_POSITION | INCREASED_WIDTH : INCREASED_WIDTH;
+      } else {
+        return 0;
+      }
     } else {
       final int positionLengthCeiling = driver.lookaheadBacking.positionLengthCeiling();
       if (positionLengthCeiling > extantWidth) {
@@ -1672,13 +2111,19 @@ public class PositionDeque implements Iterable<Spans> {
         return INCREASED_WIDTH;
       } else if (positionLengthCeiling <= IndexLookahead.MAX_SPECIAL_VALUE) {
         // positionLengthCeiling lookahead not supported in index, fallback to default
-        return (driver.variablePositionLength || supportVariableTermSpansLength || noMatchYet) ? DECREASED_END_POSITION | INCREASED_WIDTH : 0;
+        if (driver.variablePositionLength || supportVariableTermSpansLength || noMatchYet) {
+          return checkForDecreasedEnd ? DECREASED_END_POSITION | INCREASED_WIDTH : INCREASED_WIDTH;
+        } else {
+          return 0;
+        }
       } else if (positionLengthCeiling < 0) {
         // we know that positionLength may decrease enough to expose new downstream matches
         if (~positionLengthCeiling > extantWidth) {
-          return DECREASED_END_POSITION | INCREASED_WIDTH;
-        } else {
+          return checkForDecreasedEnd ? DECREASED_END_POSITION | INCREASED_WIDTH : INCREASED_WIDTH;
+        } else if (checkForDecreasedEnd) {
           return DECREASED_END_POSITION;
+        } else {
+          return 0;
         }
       } else {
         // we know there are no longer matches than current
@@ -1701,6 +2146,22 @@ public class PositionDeque implements Iterable<Spans> {
     }
   }
 
+  private static boolean greedyInitNodeLinks(Node caller, Node nextNode, int passId) {
+    final DLLNode linkNode;
+    DLLNode extantPhrasePrev = nextNode.phrasePrev;
+    if (extantPhrasePrev == null) {
+      linkNode = DLLNode.add(caller, nextNode, passId);
+    } else {
+      if (extantPhrasePrev.passId != passId) {
+        nextNode.resetBacklinks();
+      }
+      linkNode = DLLNode.add(caller, nextNode, extantPhrasePrev, passId);
+    }
+    nextNode.phrasePrev = linkNode;
+    SLLNode linkFromCaller = SLLNode.add(nextNode, linkNode, caller.phraseNext);
+    caller.phraseNext = linkFromCaller;
+    return true;
+  }
   private static SLLNode initNodeLinks(Node caller, Node nextNode, DLLReturnNode returned, int slopRemainingToNext, int passId, ComboMode comboMode) {
 //    // This is if only first and last returned nodes are tracked
 //    if (caller.deque == null) {
@@ -1711,10 +2172,10 @@ public class PositionDeque implements Iterable<Spans> {
     DLLNode extantPhrasePrev = nextNode.phrasePrev;
     if (extantPhrasePrev == null) {
       linkNode = DLLNode.add(caller, nextNode, passId);
-    } else if (extantPhrasePrev.passId != passId) {
-      nextNode.resetBacklinks();
-      linkNode = DLLNode.addPassInit(caller, nextNode, extantPhrasePrev, passId);
     } else {
+      if (extantPhrasePrev.passId != passId) {
+        nextNode.resetBacklinks();
+      }
       linkNode = DLLNode.add(caller, nextNode, extantPhrasePrev, passId);
     }
     nextNode.phrasePrev = linkNode;
@@ -1755,251 +2216,234 @@ public class PositionDeque implements Iterable<Spans> {
   static final class LinkPool {
     private final LinkTypeGroup h = new LinkTypeGroup(); // heads
     private final LinkTypeGroup t = new LinkTypeGroup(); // tails
-    public void addDLLEndNodeLink(DLLEndNodeLink v) {
-      final DLLEndNodeLink extantHead = h.dllEndNodeLink;
+    public void addDLLEndNodeLink(RefLinkTracker<DLLEndNodeLink> v) {
+      final RefLinkTracker<DLLEndNodeLink> extantHead = h.dllEndNodeLink();
       if (extantHead != null) {
-        v.trackNextRef = extantHead;
-        h.dllEndNodeLink = v;
+        v.next = extantHead;
+        h.dllEndNodeLink(v);
       } else {
-        h.dllEndNodeLink = v;
-        t.dllEndNodeLink = v;
+        h.dllEndNodeLink(v);
+        t.dllEndNodeLink(v);
       }
     }
-    public void addDLLNode(DLLNode v) {
-      final DLLNode extantHead = h.dllNode;
+    public void addDLLNode(RefLinkTracker<DLLNode> v) {
+      final RefLinkTracker<DLLNode> extantHead = h.dllNode();
       if (extantHead != null) {
-        v.trackNextRef = extantHead;
-        h.dllNode = v;
+        v.next = extantHead;
+        h.dllNode(v);
       } else {
-        h.dllNode = v;
-        t.dllNode = v;
+        h.dllNode(v);
+        t.dllNode(v);
       }
     }
-    public void addDLLReturnNode(DLLReturnNode v) {
-      final DLLReturnNode extantHead = h.dllReturnNode;
+    public void addDLLReturnNode(RefLinkTracker<DLLReturnNode> v) {
+      final RefLinkTracker<DLLReturnNode> extantHead = h.dllReturnNode();
       if (extantHead != null) {
-        v.trackNextRef = extantHead;
-        h.dllReturnNode = v;
+        v.next = extantHead;
+        h.dllReturnNode(v);
       } else {
-        h.dllReturnNode = v;
-        t.dllReturnNode = v;
+        h.dllReturnNode(v);
+        t.dllReturnNode(v);
       }
     }
-    public void addFullEndNodeLink(FullEndNodeLink v) {
-      final FullEndNodeLink extantHead = h.fullEndNodeLink;
+    public void addFullEndNodeLink(RefLinkTracker<FullEndNodeLink> v) {
+      final RefLinkTracker<FullEndNodeLink> extantHead = h.fullEndNodeLink();
       if (extantHead != null) {
-        v.trackNextRef = extantHead;
-        h.fullEndNodeLink = v;
+        v.next = extantHead;
+        h.fullEndNodeLink(v);
       } else {
-        h.fullEndNodeLink = v;
-        t.fullEndNodeLink = v;
+        h.fullEndNodeLink(v);
+        t.fullEndNodeLink(v);
       }
     }
-    public void addRevisitNode(RevisitNode v) {
-      final RevisitNode extantHead = h.revisitNode;
+    public void addRevisitNode(RefLinkTracker<RevisitNode> v) {
+      final RefLinkTracker<RevisitNode> extantHead = h.revisitNode();
       if (extantHead != null) {
-        v.trackNextRef = extantHead;
-        h.revisitNode = v;
+        v.next = extantHead;
+        h.revisitNode(v);
       } else {
-        h.revisitNode = v;
-        t.revisitNode = v;
+        h.revisitNode(v);
+        t.revisitNode(v);
       }
     }
-    public void addSLLNode(SLLNode v) {
-      final SLLNode extantHead = h.sllNode;
+    public void addSLLNode(RefLinkTracker<SLLNode> v) {
+      final RefLinkTracker<SLLNode> extantHead = h.sllNode();
       if (extantHead != null) {
-        v.trackNextRef = extantHead;
-        h.sllNode = v;
+        v.next = extantHead;
+        h.sllNode(v);
       } else {
-        h.sllNode = v;
-        t.sllNode = v;
+        h.sllNode(v);
+        t.sllNode(v);
       }
     }
-    public void addStoredPostings(StoredPostings v) {
-      final StoredPostings extantHead = h.storedPostings;
+    public void addStoredPostings(RefLinkTracker<StoredPostings> v) {
+      final RefLinkTracker<StoredPostings> extantHead = h.storedPostings();
       if (extantHead != null) {
-        v.trackNextRef = extantHead;
-        h.storedPostings = v;
+        v.next = extantHead;
+        h.storedPostings(v);
       } else {
-        h.storedPostings = v;
-        t.storedPostings = v;
+        h.storedPostings(v);
+        t.storedPostings(v);
       }
     }
     public DLLEndNodeLink getDLLEndNodeLink() {
-      final DLLEndNodeLink ret = h.dllEndNodeLink;
+      final RefLinkTracker<DLLEndNodeLink> ret = h.dllEndNodeLink();
       if (ret == null) {
         return null;
-      } else if (ret == t.dllEndNodeLink) {
-        h.dllEndNodeLink = null;
-        t.dllEndNodeLink = null;
+      } else if (ret == t.dllEndNodeLink()) {
+        h.dllEndNodeLink(null);
+        t.dllEndNodeLink(null);
       } else {
-        h.dllEndNodeLink = ret.trackNextRef;
+        h.dllEndNodeLink(ret.next);
       }
-      return ret;
+      return ret.ref;
     }
     public DLLNode getDLLNode() {
-      final DLLNode ret = h.dllNode;
+      final RefLinkTracker<DLLNode> ret = h.dllNode();
       if (ret == null) {
         return null;
-      } else if (ret == t.dllNode) {
-        h.dllNode = null;
-        t.dllNode = null;
+      } else if (ret == t.dllNode()) {
+        h.dllNode(null);
+        t.dllNode(null);
       } else {
-        h.dllNode = ret.trackNextRef;
+        h.dllNode(ret.next);
       }
-      return ret;
+      return ret.ref;
     }
     public DLLReturnNode getDLLReturnNode() {
-      final DLLReturnNode ret = h.dllReturnNode;
+      final RefLinkTracker<DLLReturnNode> ret = h.dllReturnNode();
       if (ret == null) {
         return null;
-      } else if (ret == t.dllReturnNode) {
-        h.dllReturnNode = null;
-        t.dllReturnNode = null;
+      } else if (ret == t.dllReturnNode()) {
+        h.dllReturnNode(null);
+        t.dllReturnNode(null);
       } else {
-        h.dllReturnNode = ret.trackNextRef;
+        h.dllReturnNode(ret.next);
       }
-      return ret;
+      return ret.ref;
     }
     public FullEndNodeLink getFullEndNodeLink() {
-      final FullEndNodeLink ret = h.fullEndNodeLink;
+      final RefLinkTracker<FullEndNodeLink> ret = h.fullEndNodeLink();
       if (ret == null) {
         return null;
-      } else if (ret == t.fullEndNodeLink) {
-        h.fullEndNodeLink = null;
-        t.fullEndNodeLink = null;
+      } else if (ret == t.fullEndNodeLink()) {
+        h.fullEndNodeLink(null);
+        t.fullEndNodeLink(null);
       } else {
-        h.fullEndNodeLink = ret.trackNextRef;
+        h.fullEndNodeLink(ret.next);
       }
-      return ret;
+      return ret.ref;
     }
     public RevisitNode getRevisitNode() {
-      final RevisitNode ret = h.revisitNode;
+      final RefLinkTracker<RevisitNode> ret = h.revisitNode();
       if (ret == null) {
         return null;
-      } else if (ret == t.revisitNode) {
-        h.revisitNode = null;
-        t.revisitNode = null;
+      } else if (ret == t.revisitNode()) {
+        h.revisitNode(null);
+        t.revisitNode(null);
       } else {
-        h.revisitNode = ret.trackNextRef;
+        h.revisitNode(ret.next);
       }
-      return ret;
+      return ret.ref;
     }
     public SLLNode getSLLNode() {
-      final SLLNode ret = h.sllNode;
+      final RefLinkTracker<SLLNode> ret = h.sllNode();
       if (ret == null) {
         return null;
-      } else if (ret == t.sllNode) {
-        h.sllNode = null;
-        t.sllNode = null;
+      } else if (ret == t.sllNode()) {
+        h.sllNode(null);
+        t.sllNode(null);
       } else {
-        h.sllNode = ret.trackNextRef;
+        h.sllNode(ret.next);
       }
-      return ret;
+      return ret.ref;
     }
     public StoredPostings getStoredPostings() {
-      final StoredPostings ret = h.storedPostings;
+      final RefLinkTracker<StoredPostings> ret = h.storedPostings();
       if (ret == null) {
         return null;
-      } else if (ret == t.storedPostings) {
-        h.storedPostings = null;
-        t.storedPostings = null;
+      } else if (ret == t.storedPostings()) {
+        h.storedPostings(null);
+        t.storedPostings(null);
       } else {
-        h.storedPostings = ret.trackNextRef;
+        h.storedPostings(ret.next);
       }
-      return ret;
+      return ret.ref;
     }
-    public void returnLinksToPool(LinkPool r) {
+
+    public void returnLinksToPool(final LinkPool r) {
       final LinkTypeGroup rh = r.h;
       final LinkTypeGroup rt = r.t;
-      if (rh.dllEndNodeLink != null) {
-        if (h.dllEndNodeLink == null) {
-          h.dllEndNodeLink = rh.dllEndNodeLink;
-          t.dllEndNodeLink = rt.dllEndNodeLink;
-        } else {
-          rt.dllEndNodeLink.trackNextRef = h.dllEndNodeLink;
-          h.dllEndNodeLink = rh.dllEndNodeLink;
+      for (int i = LinkTypeGroup.LINK_TYPE_GROUP_SIZE - 1; i >= 0; i--) {
+        if (rh.links[i] != null) {
+          if (h.links[i] == null) {
+            h.links[i] = rh.links[i];
+            t.links[i] = rt.links[i];
+          } else {
+            rt.links[i].next = h.links[i];
+            h.links[i] = rh.links[i];
+          }
+          rh.links[i] = null;
+          rt.links[i] = null;
         }
-        rh.dllEndNodeLink = null;
-        rt.dllEndNodeLink = null;
-      }
-      if (rh.dllNode != null) {
-        if (h.dllNode == null) {
-          h.dllNode = rh.dllNode;
-          t.dllNode = rt.dllNode;
-        } else {
-          rt.dllNode.trackNextRef = h.dllNode;
-          h.dllNode = rh.dllNode;
-        }
-        rh.dllNode = null;
-        rt.dllNode = null;
-      }
-      if (rh.dllReturnNode != null) {
-        if (h.dllReturnNode == null) {
-          h.dllReturnNode = rh.dllReturnNode;
-          t.dllReturnNode = rt.dllReturnNode;
-        } else {
-          rt.dllReturnNode.trackNextRef = h.dllReturnNode;
-          h.dllReturnNode = rh.dllReturnNode;
-        }
-        rh.dllReturnNode = null;
-        rt.dllReturnNode = null;
-      }
-      if (rh.fullEndNodeLink != null) {
-        if (h.fullEndNodeLink == null) {
-          h.fullEndNodeLink = rh.fullEndNodeLink;
-          t.fullEndNodeLink = rt.fullEndNodeLink;
-        } else {
-          rt.fullEndNodeLink.trackNextRef = h.fullEndNodeLink;
-          h.fullEndNodeLink = rh.fullEndNodeLink;
-        }
-        rh.fullEndNodeLink = null;
-        rt.fullEndNodeLink = null;
-      }
-      if (rh.revisitNode != null) {
-        if (h.revisitNode == null) {
-          h.revisitNode = rh.revisitNode;
-          t.revisitNode = rt.revisitNode;
-        } else {
-          rt.revisitNode.trackNextRef = h.revisitNode;
-          h.revisitNode = rh.revisitNode;
-        }
-        rh.revisitNode = null;
-        rt.revisitNode = null;
-      }
-      if (rh.sllNode != null) {
-        if (h.sllNode == null) {
-          h.sllNode = rh.sllNode;
-          t.sllNode = rt.sllNode;
-        } else {
-          rt.sllNode.trackNextRef = h.sllNode;
-          h.sllNode = rh.sllNode;
-        }
-        rh.sllNode = null;
-        rt.sllNode = null;
-      }
-      if (rh.storedPostings != null) {
-        if (h.storedPostings == null) {
-          h.storedPostings = rh.storedPostings;
-          t.storedPostings = rt.storedPostings;
-        } else {
-          rt.storedPostings.trackNextRef = h.storedPostings;
-          h.storedPostings = rh.storedPostings;
-        }
-        rh.storedPostings = null;
-        rt.storedPostings = null;
       }
     }
   }
 
+  static final class RefLinkTracker<T> {
+    private final T ref;
+    private RefLinkTracker<T> next;
+    public RefLinkTracker(T ref) {
+      this.ref = ref;
+    }
+  }
+
   private static final class LinkTypeGroup {
-    private DLLEndNodeLink dllEndNodeLink = null;
-    private DLLNode dllNode = null;
-    private DLLReturnNode dllReturnNode = null;
-    private FullEndNodeLink fullEndNodeLink = null;
-    private RevisitNode revisitNode = null;
-    private SLLNode sllNode = null;
-    private StoredPostings storedPostings = null;
+
+    private static final int LINK_TYPE_GROUP_SIZE = 7;
+    private final RefLinkTracker[] links = new RefLinkTracker[LINK_TYPE_GROUP_SIZE];
+    private RefLinkTracker<DLLEndNodeLink> dllEndNodeLink() {
+      return links[0];
+    }
+    private RefLinkTracker<DLLNode> dllNode() {
+      return links[1];
+    }
+    private RefLinkTracker<DLLReturnNode> dllReturnNode() {
+      return links[2];
+    }
+    private RefLinkTracker<FullEndNodeLink> fullEndNodeLink() {
+      return links[3];
+    }
+    private RefLinkTracker<RevisitNode> revisitNode() {
+      return links[4];
+    }
+    private RefLinkTracker<SLLNode> sllNode() {
+      return links[5];
+    }
+    private RefLinkTracker<StoredPostings> storedPostings() {
+      return links[6];
+    }
+    private void dllEndNodeLink(RefLinkTracker<DLLEndNodeLink> rlt) {
+      links[0] = rlt;
+    }
+    private void dllNode(RefLinkTracker<DLLNode> rlt) {
+      links[1] = rlt;
+    }
+    private void dllReturnNode(RefLinkTracker<DLLReturnNode> rlt) {
+      links[2] = rlt;
+    }
+    private void fullEndNodeLink(RefLinkTracker<FullEndNodeLink> rlt) {
+      links[3] = rlt;
+    }
+    private void revisitNode(RefLinkTracker<RevisitNode> rlt) {
+      links[4] = rlt;
+    }
+    private void sllNode(RefLinkTracker<SLLNode> rlt) {
+      links[5] = rlt;
+    }
+    private void storedPostings(RefLinkTracker<StoredPostings> rlt) {
+      links[6] = rlt;
+    }
   }
 
   public static final class DLLReturnNode {
@@ -2009,7 +2453,12 @@ public class PositionDeque implements Iterable<Spans> {
     DLLReturnNode prev;
     DLLReturnNode next;
     private int currentStart;
-    private DLLReturnNode trackNextRef;
+    private final RefLinkTracker<DLLReturnNode> trackNextRef = new RefLinkTracker<>(this);
+    private int greedySlopRemaining = Integer.MIN_VALUE;
+
+    int getGreedySlopRemaining() {
+      return ENABLE_GREEDY_RETURN ? greedySlopRemaining : next.node.maxSlopRemainingEndNodeLink.endNode.maxSlopRemainingToStart;
+    }
 
     public DLLReturnNode() {
       this.anchor = this;
@@ -2020,6 +2469,11 @@ public class PositionDeque implements Iterable<Spans> {
     
     private void setCurrentStart(int startPosition) {
       this.currentStart = startPosition;
+    }
+
+    private boolean setGreedyWidth(int slopRemaining) {
+      this.greedySlopRemaining = slopRemaining;
+      return slopRemaining >= 0;
     }
 
     int getCurrentStart() {
@@ -2035,11 +2489,17 @@ public class PositionDeque implements Iterable<Spans> {
     }
 
     private static DLLReturnNode newInstance(DLLReturnNode anchor, Node n) {
-      DLLReturnNode ret = n.dequePointer[0].pool.getDLLReturnNode();
+      final PositionDeque d = n.dequePointer[0];
+      DLLReturnNode ret = d.pool.getDLLReturnNode();
       if (ret == null) {
         ret = new DLLReturnNode(anchor);
-        n.pool.addDLLReturnNode(ret);
+        if (TRACK_POOLING) {
+          d.dllReturnNodeCt++;
+        }
+      } else if (TRACK_POOLING) {
+        d.dllReturnNodeCtR++;
       }
+      n.pool.addDLLReturnNode(ret.trackNextRef);
       return ret;
     }
 
@@ -2089,7 +2549,7 @@ public class PositionDeque implements Iterable<Spans> {
     private int[] refCount;
     private RevisitNode prev;
     private RevisitNode next;
-    private RevisitNode trackNextRef;
+    private final RefLinkTracker<RevisitNode> trackNextRef = new RefLinkTracker<>(this);
 
     public RevisitNode() {
       this.phrasePrev = null;
@@ -2104,11 +2564,17 @@ public class PositionDeque implements Iterable<Spans> {
     }
 
     private static RevisitNode newInstance(RevisitNode anchor, Node n) {
-      RevisitNode ret = n.dequePointer[0].pool.getRevisitNode();
+      final PositionDeque d = n.dequePointer[0];
+      RevisitNode ret = d.pool.getRevisitNode();
       if (ret == null) {
         ret = new RevisitNode(anchor);
-        n.pool.addRevisitNode(ret);
+        if (TRACK_POOLING) {
+          d.revisitNodeCt++;
+        }
+      } else if (TRACK_POOLING) {
+        d.revisitNodeCtR++;
       }
+      n.pool.addRevisitNode(ret.trackNextRef);
       return ret;
     }
 
@@ -2151,14 +2617,20 @@ public class PositionDeque implements Iterable<Spans> {
     private Node endNode;
     private DLLEndNodeLink prev;
     private DLLEndNodeLink next;
-    private DLLEndNodeLink trackNextRef;
-    
+    private final RefLinkTracker<DLLEndNodeLink> trackNextRef = new RefLinkTracker<>(this);
+
     private static DLLEndNodeLink newPooledInstance(Node n) {
-      DLLEndNodeLink ret = n.dequePointer[0].pool.getDLLEndNodeLink();
+      final PositionDeque d = n.dequePointer[0];
+      DLLEndNodeLink ret = d.pool.getDLLEndNodeLink();
       if (ret == null) {
         ret = new DLLEndNodeLink();
-        n.pool.addDLLEndNodeLink(ret);
+        if (TRACK_POOLING) {
+          d.dllEndNodeLinkCt++;
+        }
+      } else if (TRACK_POOLING) {
+        d.dllEndNodeLinkCtR++;
       }
+      n.pool.addDLLEndNodeLink(ret.trackNextRef);
       return ret;
     }
 
@@ -2201,8 +2673,8 @@ public class PositionDeque implements Iterable<Spans> {
     private FullEndNodeLink prev;
     private FullEndNodeLink next;
     private int remainingSlopToEnd;
-    private FullEndNodeLink trackNextRef;
-    
+    private final RefLinkTracker<FullEndNodeLink> trackNextRef = new RefLinkTracker<>(this);
+
     public FullEndNodeLink initBootstrap(Node node) {
       this.remainingSlopToEnd = -1;
       this.node = node;
@@ -2214,20 +2686,32 @@ public class PositionDeque implements Iterable<Spans> {
     }
 
     private static FullEndNodeLink newInstance(Node n) {
-      FullEndNodeLink ret = n.dequePointer[0].pool.getFullEndNodeLink();
+      final PositionDeque d = n.dequePointer[0];
+      FullEndNodeLink ret = d.pool.getFullEndNodeLink();
       if (ret == null) {
         ret = new FullEndNodeLink();
-        n.pool.addFullEndNodeLink(ret);
+        if (TRACK_POOLING) {
+          d.fullEndNodeLinkCt++;
+        }
+      } else if (TRACK_POOLING) {
+        d.fullEndNodeLinkCtR++;
       }
+      n.pool.addFullEndNodeLink(ret.trackNextRef);
       return ret.initBootstrap(n);
     }
 
     private static FullEndNodeLink newInstance(FullEndNodeLink anchor, Node n) {
-      FullEndNodeLink ret = n.dequePointer[0].pool.getFullEndNodeLink();
+      final PositionDeque d = n.dequePointer[0];
+      FullEndNodeLink ret = d.pool.getFullEndNodeLink();
       if (ret == null) {
         ret = new FullEndNodeLink();
-        n.pool.addFullEndNodeLink(ret);
+        if (TRACK_POOLING) {
+          d.fullEndNodeLinkCt++;
+        }
+      } else if (TRACK_POOLING) {
+        d.fullEndNodeLinkCtR++;
       }
+      n.pool.addFullEndNodeLink(ret.trackNextRef);
       ret.anchor = anchor;
       return ret;
     }
@@ -2267,10 +2751,8 @@ public class PositionDeque implements Iterable<Spans> {
     public Node phraseNext;
     private DLLNode prev;
     private DLLNode next;
-    private DLLNode prevNoOutput;
-    private DLLNode nextNoOutput;
     private int passId;
-    private DLLNode trackNextRef;
+    private final RefLinkTracker<DLLNode> trackNextRef = new RefLinkTracker<>(this);
 
     @Override
     public String toString() {
@@ -2281,20 +2763,23 @@ public class PositionDeque implements Iterable<Spans> {
       this.phrasePrev = phrasePrev;
       this.phraseNext = phraseNext;
       this.next = next;
-      this.nextNoOutput = next;
       this.passId = passId;
       this.prev = null;
-      this.prevNoOutput = null;
-      this.nextNoOutput = null;
       return this;
     }
 
     private static DLLNode newInstance(Node n) {
-      DLLNode ret = n.dequePointer[0].pool.getDLLNode();
+      final PositionDeque d = n.dequePointer[0];
+      DLLNode ret = d.pool.getDLLNode();
       if (ret == null) {
         ret = new DLLNode();
-        n.pool.addDLLNode(ret);
+        if (TRACK_POOLING) {
+          d.dllNodeCt++;
+        }
+      } else if (TRACK_POOLING) {
+        d.dllNodeCtR++;
       }
+      n.pool.addDLLNode(ret.trackNextRef);
       return ret;
     }
 
@@ -2311,25 +2796,9 @@ public class PositionDeque implements Iterable<Spans> {
     public static DLLNode add(Node phrasePrev, Node phraseNext, DLLNode extant, int passId) {
       DLLNode ret = newInstance(phraseNext).init(phrasePrev, phraseNext, extant, passId);
       extant.prev = ret;
-      extant.prevNoOutput = ret;
       return ret;
     }
 
-    public static DLLNode addPassInit(Node phrasePrev, Node phraseNext, DLLNode extant, int passId) {
-      DLLNode ret = add(phrasePrev, phraseNext, extant, passId);
-      DLLNode resetNoOutput2 = extant.next;
-      if (resetNoOutput2 != null) {
-        DLLNode resetNoOutput1 = extant;
-        DLLNode tmp;
-        do {
-          resetNoOutput1.nextNoOutput = resetNoOutput2;
-          resetNoOutput2.prevNoOutput = resetNoOutput1;
-        } while ((tmp = resetNoOutput2.next) != null && assign(true, resetNoOutput1 = resetNoOutput2, resetNoOutput2 = tmp));
-      }
-      phraseNext.lastPassPhrasePrev = extant;
-      return ret;
-    }
-    
     /**
      * 
      * @return null if head of list not changed as result of this call; EMPTY_LIST sentinel value
@@ -2340,44 +2809,15 @@ public class PositionDeque implements Iterable<Spans> {
         if (prev == null) {
           return EMPTY_LIST;
         } else {
-          if (prevNoOutput != null) {
-            prevNoOutput.nextNoOutput = null;
-          }
           prev.next = null;
           return null;
         }
       } else if (prev == null) {
-        if (nextNoOutput != null) {
-          nextNoOutput.prevNoOutput = null;
-        }
         next.prev = null;
         return next;
       } else {
         prev.next = next;
         next.prev = prev;
-        removeNoOutput();
-        return null;
-      }
-    }
-    /**
-     * 
-     * @return null if head of list not changed as result of this call; EMPTY_LIST sentinel value
-     * if list is empty as a result of this call; otherwise the new head of this list
-     */
-    public DLLNode removeNoOutput() {
-      if (nextNoOutput == null) {
-        if (prevNoOutput == null) {
-          return EMPTY_LIST;
-        } else {
-          prevNoOutput.nextNoOutput = null;
-          return null;
-        }
-      } else if (prevNoOutput == null) {
-        nextNoOutput.prevNoOutput = null;
-        return nextNoOutput;
-      } else {
-        prevNoOutput.nextNoOutput = nextNoOutput;
-        nextNoOutput.prevNoOutput = prevNoOutput;
         return null;
       }
     }
@@ -2389,7 +2829,7 @@ public class PositionDeque implements Iterable<Spans> {
     private RevisitNode revisitNode;
     private FullEndNodeLink revisitEndNode;
     private int lastPassId = -1;
-    private SLLNode trackNextRef;
+    private final RefLinkTracker<SLLNode> trackNextRef = new RefLinkTracker<>(this);
 
     private SLLNode init(DLLNode node, SLLNode next) {
       this.node = node;
@@ -2404,13 +2844,20 @@ public class PositionDeque implements Iterable<Spans> {
     }
 
     private static SLLNode newInstance(Node n) {
-      SLLNode ret = n.dequePointer[0].pool.getSLLNode();//.getSLLNode();
+      final PositionDeque d = n.dequePointer[0];
+      SLLNode ret = d.pool.getSLLNode();//.getSLLNode();
       if (ret != null) {
+        if (TRACK_POOLING) {
+          d.sllNodeCtR++;
+        }
         ret.clear();
       } else {
         ret = new SLLNode();
-        n.pool.addSLLNode(ret);
+        if (TRACK_POOLING) {
+          d.sllNodeCt++;
+        }
       }
+      n.pool.addSLLNode(ret.trackNextRef);
       return ret;
     }
 
@@ -2434,10 +2881,10 @@ public class PositionDeque implements Iterable<Spans> {
   /**
    * The Node class is the main node used in the "two-dimensional Queue" consisting of parallel PositionDeques.
    */
-  static class Node extends Spans implements SpanCollector {
+  static final class Node extends Spans implements SpanCollector {
 
     private int outputPassId = -1;
-    private int output = 0;
+    int output = 0;
     private DLLReturnNode initialzedReverseLinks = null;
     final PositionDeque[] dequePointer;
     private final int phraseIndex;
@@ -2508,11 +2955,9 @@ public class PositionDeque implements Iterable<Spans> {
      */
     private SLLNode phraseNext = null;
     private DLLNode phrasePrev = null;
-    private DLLNode phrasePrevNoOutput = null;
-    private DLLNode lastPassPhrasePrev = null;
 
 
-    public Node(PositionDeque[] dequePointer, int phraseIndex) {
+    public Node(PositionDeque[] dequePointer, int phraseIndex, int index, long provisionalRepeat, Spans backing) {
       this.dequePointer = dequePointer;
       final PositionDeque deque = dequePointer[0];
       this.phraseIndex = phraseIndex;
@@ -2531,34 +2976,21 @@ public class PositionDeque implements Iterable<Spans> {
           this.associatedNodes = null;
       }
       }
-    }
-
-    public void clear() {
-      if (this.associatedNodes != null) {
-        this.associatedNodes.clear();
+      this.backing = backing;
+      this.validity = PROVISIONAL;
+      this.docId = deque.docId;
+      this.index = index;
+      switch (deque.comboMode) {
+        case FULL_DISTILLED:
+        case FULL_DISTILLED_PER_POSITION:
+        case FULL_DISTILLED_PER_START_POSITION:
+          this.endNodeLinks = FullEndNodeLink.newInstance(this);
+          this.phraseScopeId = phraseIndexShifted | provisionalRepeat | index;
+          break;
+        default:
+          this.endNodeLinks = null;
+          this.phraseScopeId = -1;
       }
-      this.initialzedReverseLinks = null;
-      this.lastPassPhrasePrev = null;
-      this.maxSlopRemainingEndNodeLink = null;
-      this.maxSlopRemainingPhraseNext = null;
-      this.maxSlopRemainingPhrasePrev = null;
-      this.maxSlopRemainingToEnd = -1;
-      this.maxSlopRemainingToStart = -1;
-      this.maxSlopToCaller = -1;
-      this.output = 0;
-      this.outputPassId = -1;
-      this.phraseNext = null;
-      this.phrasePrev = null;
-      this.phrasePrevNoOutput = null;
-      this.postingsHead.clear();
-      this.postings = postingsHead;
-      this.refCountAtPassId = -1;
-      this.sealed = SlopStatus.NONE;
-      this.sealedThreshold = -1;
-      this.sealedTo = -1;
-      this.startPosition = -1;
-      this.endPosition = -1;
-      this.width = -1;
     }
 
     public void initProvisional(int index, long provisionalRepeat, Spans backing) {
@@ -2578,6 +3010,39 @@ public class PositionDeque implements Iterable<Spans> {
           this.endNodeLinks = null;
           this.phraseScopeId = -1;
       }
+    }
+
+    public void initProvisionalGreedy(Spans backing) {
+      this.backing = backing;
+      this.validity = PROVISIONAL;
+      final PositionDeque deque = dequePointer[0];
+      this.docId = deque.docId;
+    }
+
+    public void clear() {
+      if (this.associatedNodes != null) {
+        this.associatedNodes.clear();
+      }
+      this.initialzedReverseLinks = null;
+      this.maxSlopRemainingEndNodeLink = null;
+      this.maxSlopRemainingPhraseNext = null;
+      this.maxSlopRemainingPhrasePrev = null;
+      this.maxSlopRemainingToEnd = -1;
+      this.maxSlopRemainingToStart = -1;
+      this.maxSlopToCaller = -1;
+      this.output = 0;
+      this.outputPassId = -1;
+      this.phraseNext = null;
+      this.phrasePrev = null;
+      this.postingsHead.clear();
+      this.postings = postingsHead;
+      this.refCountAtPassId = -1;
+      this.sealed = SlopStatus.NONE;
+      this.sealedThreshold = -1;
+      this.sealedTo = -1;
+      this.startPosition = -1;
+      this.endPosition = -1;
+      this.width = -1;
     }
 
     public void init(int startPosition, int endPosition, int width) {
@@ -2659,7 +3124,7 @@ public class PositionDeque implements Iterable<Spans> {
         }
       } else {
         // this is the only node; head should == tail
-        deque.clear(false);
+        deque.clear(false, false);
       }
       validity = 0;
       if (initialzedReverseLinks == null) {
@@ -2769,25 +3234,20 @@ public class PositionDeque implements Iterable<Spans> {
     return true;
   }
 
+  private static boolean assign(Object obj) {
+    return true;
+  }
   private void returnNodesToPool() {
     if (nodePoolReturnQueueHead != null) {
       if (POOL_NODES) {
         final Node limit = nodePoolReturnQueueTail;
         Node n = nodePoolReturnQueueHead;
-        pool.returnLinksToPool(n.pool);
-        if (n.endNodeLinks != null) {
-          n.endNodeLinks.clear();
-        }
-        int i = 0;
-        if (n != limit) {
-          do {
-            n = n.trackNextRef;
-            pool.returnLinksToPool(n.pool);
-            if (n.endNodeLinks != null) {
-              n.endNodeLinks.clear();
-            }
-          } while (n != limit);
-        }
+        do {
+          pool.returnLinksToPool(n.pool);
+          if (n.endNodeLinks != null) {
+            n.endNodeLinks.clear();
+          }
+        } while (n != limit && assign(n = n.trackNextRef));
         if (nodePoolHead != null) {
           nodePoolReturnQueueTail.trackNextRef = nodePoolHead;
           nodePoolHead = nodePoolReturnQueueHead;
@@ -2806,27 +3266,20 @@ public class PositionDeque implements Iterable<Spans> {
   private int reusedNodeCount = 0;
   private int createNodeCount = 0;
   private int dllEndNodeLinkCt = 0;
+  private int dllEndNodeLinkCtR = 0;
   private int fullEndNodeLinkCt = 0;
+  private int fullEndNodeLinkCtR = 0;
   private int dllNodeCt = 0;
+  private int dllNodeCtR = 0;
   private int sllNodeCt = 0;
+  private int sllNodeCtR = 0;
   private int dllReturnNodeCt = 0;
+  private int dllReturnNodeCtR = 0;
   private int revisitNodeCt = 0;
+  private int revisitNodeCtR = 0;
+  int storedPostingsCt = 0;
+  int storedPostingsCtR = 0;
   private Node getPooledNode(Spans backing) {
-    final Node ret;
-    if (nodePoolHead != null) {
-      ret = nodePoolHead;
-      if (ret != nodePoolTail) {
-        nodePoolHead = ret.trackNextRef;
-      } else {
-        nodePoolHead = null;
-        nodePoolTail = null;
-      }
-      reusedNodeCount++;
-      ret.clear();
-    } else {
-      createNodeCount++;
-      ret = new Node(dequePointer, phraseIndex);
-    }
     switch (comboMode) {
       case FULL_DISTILLED:
       case FULL_DISTILLED_PER_POSITION:
@@ -2839,7 +3292,26 @@ public class PositionDeque implements Iterable<Spans> {
         }
         break;
     }
-    ret.initProvisional(head, provisionalRepeat, backing);
+    final Node ret;
+    if (nodePoolHead != null) {
+      ret = nodePoolHead;
+      if (ret != nodePoolTail) {
+        nodePoolHead = ret.trackNextRef;
+      } else {
+        nodePoolHead = null;
+        nodePoolTail = null;
+      }
+      if (TRACK_POOLING) {
+        reusedNodeCount++;
+      }
+      ret.clear();
+      ret.initProvisional(head, provisionalRepeat, backing);
+    } else {
+      if (TRACK_POOLING) {
+        createNodeCount++;
+      }
+      ret = new Node(dequePointer, phraseIndex, head, provisionalRepeat, backing);
+    }
     return ret;
   }
 
@@ -2927,13 +3399,7 @@ public class PositionDeque implements Iterable<Spans> {
   private Node headNode;
   private Node tailNode;
   
-  private static final ArrayCreator<Node> NODE_ARRAY_CREATOR = new ArrayCreator<Node>() {
-    @Override
-    public Node[] newArray(int size) {
-      return new Node[size];
-    }
-  };
-  private final LocalArrayList<Node> conserveNodes = new LocalArrayList<>(16, NODE_ARRAY_CREATOR);
+  private final LocalNodeArrayList conserveNodes = new LocalNodeArrayList(16);
   
   Node add(final Node n, int startPosition, int endPosition, int width) {
     final int size = head - tail;
@@ -2992,7 +3458,12 @@ public class PositionDeque implements Iterable<Spans> {
     return n;
   }
 
-  public final void clear(boolean repool) {
+  public final void clear(boolean repool, boolean newDoc) {
+    if (uninitializedForDoc) {
+      return;
+    } else if (newDoc) {
+      uninitializedForDoc = true;
+    }
     if (repool) {
       if (tail != head) {
         Node n = tailNode;
@@ -3002,7 +3473,7 @@ public class PositionDeque implements Iterable<Spans> {
           }
         } while ((n = n.next) != null);
       }
-      initProvisional();
+      initProvisional(newDoc);
       purgeProvisional();
       final DLLReturnNode anchor = returned.anchor;
       DLLReturnNode drn = returned.next;
@@ -3056,6 +3527,88 @@ public class PositionDeque implements Iterable<Spans> {
         } else {
           drop = true;
         }
+      }
+    }
+  }
+
+  static final class StackFrame {
+
+    final PositionDeque d;
+    private Node caller;
+    int hardMinStart;
+    int softMinStart;
+    int startCeiling;
+    int minEnd;
+    private int remainingSlopToCaller;
+    private int previousMaxSlopToCaller;
+    int start;
+    private Node leastSloppyPathToPhraseEnd;
+    private Node maxSlopRemainingEndNode;
+    int maxSlopRemainingToPhraseEnd;
+    Node nextNode;
+    private int updateSealedToThreshold;
+    private int updateSealedTo;
+    boolean keepUpdatingSealedTo;
+    final boolean defaultCacheNodePaths;
+    int remainingSlop;
+    private int maxSlopRemainingCandidate;
+    int remainingSlopToEnd;
+    private SLLNode revisitFrom;
+    boolean pseudoReturn = false;
+
+    public StackFrame(PositionDeque d, boolean greedyReturn) {
+      this.d = d;
+      this.defaultCacheNodePaths = !greedyReturn;
+    }
+
+    public void initArgs(Node caller, int hardMinStart, int softMinStart, int startCeiling, int minEnd, int remainingSlopToCaller) {
+      this.caller = caller;
+      this.hardMinStart = hardMinStart;
+      this.softMinStart = softMinStart;
+      this.startCeiling = startCeiling;
+      this.minEnd = minEnd;
+      this.remainingSlopToCaller = remainingSlopToCaller;
+    }
+
+    public boolean notPseudoReturn() {
+      if (pseudoReturn) {
+        remainingSlopToEnd = nextNode.maxSlopRemainingToEnd;
+        pseudoReturn = false;
+        return false;
+      } else {
+        return true;
+      }
+    }
+
+    public boolean initAlways() throws IOException {
+      if (pseudoReturn) {
+        return true;
+      }
+      this.previousMaxSlopToCaller = caller.maxSlopToCaller;
+      final int extantStart = d.driver.startPosition();
+      final boolean ret;
+      if (d.phraseIndex == 0 || (extantStart >= softMinStart && extantStart < startCeiling && d.driver.endPosition() >= minEnd)) {
+        this.start = extantStart;
+        ret = true;
+      } else {
+        this.start = d.driver.nextMatch(hardMinStart, softMinStart, startCeiling, minEnd);
+        ret = this.start >= 0;
+      }
+      if (remainingSlopToCaller > caller.maxSlopToCaller) {
+        caller.maxSlopToCaller = remainingSlopToCaller;
+      }
+      return ret;
+    }
+
+    public void init() {
+      if (!pseudoReturn) {
+        leastSloppyPathToPhraseEnd = null;
+        maxSlopRemainingEndNode = null;
+        maxSlopRemainingToPhraseEnd = Integer.MIN_VALUE;
+        this.nextNode = d.getLastNode();
+        updateSealedToThreshold = Integer.MIN_VALUE;
+        updateSealedTo = nextNode.index;
+        keepUpdatingSealedTo = defaultCacheNodePaths;
       }
     }
   }
