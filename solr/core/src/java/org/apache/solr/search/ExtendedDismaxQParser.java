@@ -286,7 +286,7 @@ public class ExtendedDismaxQParser extends QParser {
    * to parse the query.
    */
   protected ExtendedSolrQueryParser createEdismaxQueryParser(QParser qParser, String field) {
-    return new ExtendedSolrQueryParser(qParser, field, graphQueryFilter,
+    return new ExtendedSolrQueryParser(qParser, field, graphQueryFilter, config.solrParams,
         phraseAsGraphQuery, explicitPhraseAsGraphQuery, multiphraseAsGraphQuery, explicitMultiphraseAsGraphQuery);
   }
   
@@ -899,7 +899,7 @@ public class ExtendedDismaxQParser extends QParser {
   public static interface GraphQueryFilter {
     void init(NamedList args, ResourceLoader loader);
     void requestInit(SolrQueryRequest req);
-    SpanQuery filter(SpanNearQuery q, int slop, int minClauseSize) throws SyntaxError;
+    SpanQuery filter(SpanNearQuery q, int slop, int minClauseSize, SolrParams params) throws SyntaxError;
   }
 
   /**
@@ -916,6 +916,7 @@ public class ExtendedDismaxQParser extends QParser {
     }
     
     private final GraphQueryFilter graphQueryFilter;
+    private final SolrParams params;
     private final boolean phraseAsGraphQuery;
     private final boolean explicitPhraseAsGraphQuery;
     private final boolean multiphraseAsGraphQuery;
@@ -950,10 +951,10 @@ public class ExtendedDismaxQParser extends QParser {
     private int slop;
     
     public ExtendedSolrQueryParser(QParser parser, String defaultField) {
-      this(parser, defaultField, null, false, false, false, false);
+      this(parser, defaultField, null, null, false, false, false, false);
     }
     public ExtendedSolrQueryParser(QParser parser, String defaultField, GraphQueryFilter graphQueryFilter,
-        boolean phraseAsGraphQuery, boolean explicitPhraseAsGraphQuery,
+        SolrParams params, boolean phraseAsGraphQuery, boolean explicitPhraseAsGraphQuery,
         boolean multiphraseAsGraphQuery, boolean explicitMultiphraseAsGraphQuery) {
       super(parser, defaultField);
       // Respect the q.op parameter before mm will be applied later
@@ -961,6 +962,7 @@ public class ExtendedDismaxQParser extends QParser {
       QueryParser.Operator defaultOp = QueryParsing.parseOP(defaultParams.get(QueryParsing.OP));
       setDefaultOperator(defaultOp);
       this.graphQueryFilter = graphQueryFilter;
+      this.params = params;
       this.phraseAsGraphQuery = phraseAsGraphQuery;
       this.explicitPhraseAsGraphQuery = explicitPhraseAsGraphQuery;
       this.multiphraseAsGraphQuery = multiphraseAsGraphQuery;
@@ -1420,7 +1422,7 @@ public class ExtendedDismaxQParser extends QParser {
             } else if (query instanceof SpanNearQuery) {
               SpanNearQuery snq = (SpanNearQuery)query;
               if (graphQueryFilter != null) {
-                return graphQueryFilter.filter(snq, slop, minClauseSize);
+                return graphQueryFilter.filter(snq, slop, minClauseSize, params);
               }
               if (minClauseSize > 1 && snq.getClauses().length < minClauseSize) return null;
               if (slop != snq.getSlop()) {

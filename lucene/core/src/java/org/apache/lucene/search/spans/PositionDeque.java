@@ -1150,6 +1150,7 @@ public class PositionDeque implements Iterable<Spans> {
   }
 
   private int passId = -1;
+  private final boolean[] reuseableHasNext = new boolean[1];
   
   /**
    * Public entrypoint for building a "lattice" of Spans-transverse phrase links for a given startPosition.
@@ -1177,7 +1178,8 @@ public class PositionDeque implements Iterable<Spans> {
         blStack[0].initArgs(root, minStart, minStart, minStart + 1, minEnd, remainingSlopToCaller);
         ret = buildLatticeLoop(allowedSlop, comboMode, greedyReturn, ++passId, blStack, root);
       } else {
-        ret = buildLattice(root, minStart, minStart, minStart + 1, minEnd, remainingSlopToCaller, comboMode, ++passId);
+        reuseableHasNext[0] = false;
+        ret = buildLattice(root, minStart, minStart, minStart + 1, minEnd, remainingSlopToCaller, comboMode, ++passId, reuseableHasNext);
       }
       int startPosition;
       if (ret == Integer.MAX_VALUE) {
@@ -1440,14 +1442,23 @@ public class PositionDeque implements Iterable<Spans> {
    * @return
    * @throws IOException 
    */
-  private int buildLattice(final Node caller, final int hardMinStart, final int softMinStart, final int startCeiling, final int minEnd, final int remainingSlopToCaller, final ComboMode comboMode, final int passId) throws IOException {
+  private int buildLattice(final Node caller, final int hardMinStart, final int softMinStart, final int startCeiling, final int minEnd, final int remainingSlopToCaller, final ComboMode comboMode, final int passId, final boolean[] hasMatch) throws IOException {
     //System.err.println("here["+phraseIndex+"]!! "+caller+", "+softMinStart+", "+startCeiling+", "+remainingSlopToCaller+" ("+lstToString()+")");
     final int previousMaxSlopToCaller = caller.maxSlopToCaller;
     if (remainingSlopToCaller > caller.maxSlopToCaller) {
       caller.maxSlopToCaller = remainingSlopToCaller;
     }
-    int start = driver.nextMatch(hardMinStart, softMinStart, startCeiling, minEnd);
-    if (start >= 0) {
+    int start;
+    final int initialStart = driver.startPosition();
+    final boolean hasInitialMatch;
+    if (phraseIndex == 0 || (initialStart >= softMinStart && initialStart < startCeiling && driver.endPosition() >= minEnd)) {
+      start = initialStart;
+      hasInitialMatch = true;
+    } else {
+      start = driver.nextMatch(hardMinStart, softMinStart, startCeiling, minEnd);
+      hasInitialMatch = start >= 0;
+    }
+    if (hasInitialMatch) {
       Node leastSloppyPathToPhraseEnd = null;
       Node maxSlopRemainingEndNode = null;
       int maxSlopRemainingToPhraseEnd = Integer.MIN_VALUE;
@@ -1517,7 +1528,7 @@ public class PositionDeque implements Iterable<Spans> {
                 int nextMinEnd = next.next == null ? -1 : Math.min(nextHardMinStart + 1, next.next.driver.getMinStart());
                 next.driver.reset(nextNode.sealedTo, -1, nextSoftMinStart);
                 //System.err.println("inspecting from "+nextNode+"["+nextNode.deque.phraseIndex+"] "+nextSoftMinStart+", "+next.driver.startPosition()+", !"+nextNode.sealedThreshold+">=<"+remainingSlop);
-                int ret = next.buildLattice(nextNode, nextHardMinStart, nextSoftMinStart, nextSoftMinStart + remainingSlop + 1, nextMinEnd, remainingSlop, comboMode, passId);
+                int ret = next.buildLattice(nextNode, nextHardMinStart, nextSoftMinStart, nextSoftMinStart + remainingSlop + 1, nextMinEnd, remainingSlop, comboMode, passId, hasMatch);
                 if (ENABLE_GREEDY_RETURN && ret > Integer.MIN_VALUE + 1) {
                   return ret;
                 }
@@ -1532,7 +1543,7 @@ public class PositionDeque implements Iterable<Spans> {
               int nextMinEnd = next.next == null ? -1 : Math.min(nextHardMinStart + 1, next.next.driver.getMinStart());
               next.driver.reset(-1, nextSoftMinStart);
               //System.err.println("not cached; inspecting from " + nextNode + "[" + nextNode.deque.phraseIndex + "] " + softMinStart + ", " + next.driver.startPosition());
-              int ret = next.buildLattice(nextNode, nextHardMinStart, nextSoftMinStart, nextSoftMinStart + remainingSlop + 1, nextMinEnd, remainingSlop, comboMode, passId);
+              int ret = next.buildLattice(nextNode, nextHardMinStart, nextSoftMinStart, nextSoftMinStart + remainingSlop + 1, nextMinEnd, remainingSlop, comboMode, passId, hasMatch);
               if (ENABLE_GREEDY_RETURN && ret > Integer.MIN_VALUE + 1) {
                 return ret;
               }
@@ -1545,6 +1556,9 @@ public class PositionDeque implements Iterable<Spans> {
         }
         if (remainingSlopToEnd >= 0) {
           // we *can* get to phrase end via this route
+          if (!hasMatch[0]) {
+            hasMatch[0] = true;
+          }
           if (keepUpdatingSealedTo) {
             updateSealedTo = nextNode.index;
             if (nextNode.sealed == Node.SlopStatus.SEALED) {
@@ -1643,7 +1657,7 @@ public class PositionDeque implements Iterable<Spans> {
             remainingSlop + maxSlopRemainingToPhraseEnd >= allowedSlop)) { // have cached path to end within slop constraints
           break loopAtLevel;
         } else {
-          if (prev != null) {
+          if (prev != null || comboMode == ComboMode.GREEDY_END_POSITION) {
             switch (comboMode) {
               case FULL:
               case FULL_DISTILLED:
@@ -1748,6 +1762,13 @@ public class PositionDeque implements Iterable<Spans> {
         }
       }
       return Integer.MIN_VALUE;
+    } else if (start == Integer.MIN_VALUE && !hasMatch[0]) {
+        // we have to check d.isEmpty because stored spans could still be used for other matches,
+      // and we have to check d.driver.startPosition() because f.start could have been set by lookahead,
+      // without actually advancing the backing spans.
+      if ((isEmpty() && driver.startPosition() == Spans.NO_MORE_POSITIONS) || !mayStillMatchByShrink(driver)) {
+        return Integer.MAX_VALUE;
+      }
     }
     //System.err.println("RETURN "+maxSlopRemainingToPhraseEnd+"(/"+caller.maxSlopRemainingToEnd+") for "+caller+" via "+leastSloppyPathToPhraseEnd+" (phraseIndex="+(caller.deque == null ? null : caller.deque.phraseIndex)+")");
     return Integer.MIN_VALUE;
@@ -2076,6 +2097,15 @@ public class PositionDeque implements Iterable<Spans> {
     } while (true); // pseudoRecurse
   }
   private static final int DECREASED_END_POSITION = 1, INCREASED_WIDTH = 1 << 1;
+
+  private static boolean mayStillMatchByShrink(RecordingPushbackSpans rps) throws IOException {
+    while ((rps = rps.previous) != null) {
+      if (rps.endPositionDecreaseCeiling() > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   private static boolean mayStillMatchByShrink(int i, StackFrame[] frames) throws IOException {
     while (i-- > 0) {
