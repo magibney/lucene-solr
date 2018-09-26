@@ -179,9 +179,9 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
     }
 
     public RecordingPushbackSpans(List<Spans> backing, int allowedSlop, List<List<RecordingPushbackSpans>> repeatGroups, List<RecordingPushbackSpans> noRepeat, 
-        boolean combineRepeatGroups, Iterator<TermSpansRepeatBuffer> reuseInput, List<TermSpansRepeatBuffer> reuseOutput, boolean offsets, boolean supportVariableTermSpansLength,
+        int combineRepeatGroupsThreshold, Iterator<TermSpansRepeatBuffer> reuseInput, List<TermSpansRepeatBuffer> reuseOutput, boolean offsets, boolean supportVariableTermSpansLength,
         ComboMode comboMode, Iterator<PositionDeque> reuseDequeInput, List<PositionDeque> reuseDequeOutput) {
-      this(null, null, backing.iterator(), allowedSlop, 0, new HashMap<>(backing.size()), repeatGroups, noRepeat, backing.size(), combineRepeatGroups,
+      this(null, null, backing.iterator(), allowedSlop, 0, new HashMap<>(backing.size()), repeatGroups, noRepeat, backing.size(), combineRepeatGroupsThreshold,
           reuseInput, reuseOutput, offsets, supportVariableTermSpansLength, comboMode, reuseDequeInput, reuseDequeOutput);
       Iterator<List<RecordingPushbackSpans>> iter = repeatGroups.iterator();
       while (iter.hasNext()) {
@@ -204,7 +204,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
     }
     
     private RecordingPushbackSpans(RecordingPushbackSpans previous, RecordingPushbackSpans previousVariablePositionLength, Iterator<Spans> backing, int allowedSlop, int index,
-        Map<BytesRef, RepeatGroupEntry> repeatGroupsLookup, List<List<RecordingPushbackSpans>> repeatGroups, List<RecordingPushbackSpans> noRepeat, int size, boolean combineRepeatGroups,
+        Map<BytesRef, RepeatGroupEntry> repeatGroupsLookup, List<List<RecordingPushbackSpans>> repeatGroups, List<RecordingPushbackSpans> noRepeat, int size, int combineRepeatGroupsThreshold,
         Iterator<TermSpansRepeatBuffer> reuseInput, List<TermSpansRepeatBuffer> reuseOutput, boolean offsets, boolean supportVariableTermSpansLength, ComboMode comboMode,
         Iterator<PositionDeque> reuseDequeInput, List<PositionDeque> reuseDequeOutput) {
       final boolean preservePayloads = true;
@@ -244,7 +244,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
         previousVariablePositionLength = index == 0 ? null : this;
       }
       if (backing.hasNext()) {
-        this.next = new RecordingPushbackSpans(this, previousVariablePositionLength, backing, allowedSlop, index + 1, repeatGroupsLookup, repeatGroups, noRepeat, size, combineRepeatGroups, reuseInput, reuseOutput, offsets, supportVariableTermSpansLength, comboMode, reuseDequeInput, reuseDequeOutput);
+        this.next = new RecordingPushbackSpans(this, previousVariablePositionLength, backing, allowedSlop, index + 1, repeatGroupsLookup, repeatGroups, noRepeat, size, combineRepeatGroupsThreshold, reuseInput, reuseOutput, offsets, supportVariableTermSpansLength, comboMode, reuseDequeInput, reuseDequeOutput);
         this.stored = this.next.stored.prev;
         if (instances == null) {
           this.nextRepeat = null;
@@ -262,12 +262,13 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
             final ListIterator<RepeatTermSpans> iter;
             if (repeatIndex >= repeatCount) {
               this.nextRepeat = null;
-              if (!combineRepeatGroups) {
+              if (repeatCount < combineRepeatGroupsThreshold) {
                 this.repeatTermBacking = null;
                 this.backing = tmpBacking;
                 this.lookaheadBacking = (IndexLookahead)tmpBacking; // we know it's a TermSpans
               } else {
-                TermSpansRepeatBuffer tsrb = new TermSpansRepeatBuffer(ts, repeatCount, offsets, preservePayloads, reuseInput == null ? null : reuseInput.next(), allowedSlop + size);
+                final TermSpansRepeatBuffer reuse = reuseInput == null || !reuseInput.hasNext() ? null : reuseInput.next();
+                TermSpansRepeatBuffer tsrb = new TermSpansRepeatBuffer(ts, repeatCount, offsets, preservePayloads, reuse, allowedSlop + size);
                 reuseOutput.add(tsrb);
                 iter = tsrb.getRepeatTermSpans();
                 instanceEntry.wrappedTermSpansIter = iter;
@@ -277,7 +278,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
               }
             } else {
               this.nextRepeat = instances.get(repeatIndex);
-              if (!combineRepeatGroups) {
+              if (repeatCount < combineRepeatGroupsThreshold) {
                 if (repeatIndex == 1) {
                   matchLimitCheck = true;
                 }
@@ -298,13 +299,19 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
         this.next = null;
         this.nextRepeat = null;
         int repeatCount;
-        if (instances == null || !combineRepeatGroups || (repeatCount = instances.size()) == 1) {
+        if (instances == null || (repeatCount = instances.size()) < combineRepeatGroupsThreshold) {
           this.repeatTermBacking = null;
           this.backing = tmpBacking;
           this.lookaheadBacking = (tmpBacking instanceof IndexLookahead) ? (IndexLookahead)tmpBacking : null;
         } else {
-          TermSpansRepeatBuffer tsrb = new TermSpansRepeatBuffer(ts, repeatCount, offsets, preservePayloads, reuseInput == null ? null : reuseInput.next(), allowedSlop + size);
+          final TermSpansRepeatBuffer reuse = reuseInput == null || !reuseInput.hasNext() ? null : reuseInput.next();
+          TermSpansRepeatBuffer tsrb = new TermSpansRepeatBuffer(ts, repeatCount, offsets, preservePayloads, reuse, allowedSlop + size);
           reuseOutput.add(tsrb);
+          if (reuse != null && reuseInput.hasNext()) {
+            do {
+              reuseOutput.add(reuseInput.next());
+            } while (reuseInput.hasNext());
+          }
           final ListIterator<RepeatTermSpans> iter = tsrb.getRepeatTermSpans();
           instanceEntry.wrappedTermSpansIter = iter;
           this.repeatTermBacking = iter.previous();
@@ -883,11 +890,11 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
   }
 
   private static RecordingPushbackSpans[] wrapSpans(List<Spans> subSpans, int allowedSlop, List<List<RecordingPushbackSpans>> repeatGroups, List<RecordingPushbackSpans> noRepeat,
-      boolean combineRepeatGroups, Iterator<TermSpansRepeatBuffer> reuseInput, List<TermSpansRepeatBuffer> reuseOutput, boolean offsets, boolean supportVariableTermSpansLength,
+      int combineRepeatGroupsThreshold, Iterator<TermSpansRepeatBuffer> reuseInput, List<TermSpansRepeatBuffer> reuseOutput, boolean offsets, boolean supportVariableTermSpansLength,
       ComboMode comboMode, Iterator<PositionDeque> reuseDequeInput, List<PositionDeque> reuseDequeOutput) {
     RecordingPushbackSpans[] ret = new RecordingPushbackSpans[subSpans.size()];
     RecordingPushbackSpans next = new RecordingPushbackSpans(subSpans, allowedSlop, repeatGroups, noRepeat,
-        combineRepeatGroups, reuseInput, reuseOutput, offsets, supportVariableTermSpansLength, comboMode, reuseDequeInput, reuseDequeOutput);
+        combineRepeatGroupsThreshold, reuseInput, reuseOutput, offsets, supportVariableTermSpansLength, comboMode, reuseDequeInput, reuseDequeOutput);
     int i = 0;
     do {
       ret[i++] = next;
@@ -907,7 +914,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
   
   private final ComboMode comboMode;
   private final boolean greedyReturn;
-  private final boolean combineRepeatGroups;
+  private final int combineRepeatGroupsThreshold;
   private final boolean allowOverlap;
   private int lastEnd;
   
@@ -915,19 +922,19 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
   private final RecordingPushbackSpans[] noRepeat;
   private boolean initializedRepeatGroups;
 
-  public NearSpansOrdered(int allowedSlop, List<Spans> subSpans, ComboMode comboMode, int comboThreshold, boolean allowOverlap,
-      boolean combineRepeatSpans, Iterator<TermSpansRepeatBuffer> reuseInput, List<TermSpansRepeatBuffer> reuseOutput, boolean offsets, boolean supportVariableTermSpansLength,
+  public NearSpansOrdered(int allowedSlop, List<Spans> subSpans, ComboMode comboMode, boolean allowOverlap,
+      int combineRepeatGroupsThreshold, Iterator<TermSpansRepeatBuffer> reuseInput, List<TermSpansRepeatBuffer> reuseOutput, boolean offsets, boolean supportVariableTermSpansLength,
       Iterator<PositionDeque> reuseDequeInput, List<PositionDeque> reuseDequeOutput, List<Spans> shingles, boolean loop) throws IOException {
-    this(allowedSlop, subSpans, comboMode, comboThreshold, allowOverlap, new LinkedList<>(), new LinkedList<>(),
-        combineRepeatSpans, reuseInput, reuseOutput, offsets, supportVariableTermSpansLength, reuseDequeInput, reuseDequeOutput, shingles, loop);
+    this(allowedSlop, subSpans, comboMode, allowOverlap, new LinkedList<>(), new LinkedList<>(),
+        combineRepeatGroupsThreshold, reuseInput, reuseOutput, offsets, supportVariableTermSpansLength, reuseDequeInput, reuseDequeOutput, shingles, loop);
   }
 
-  private NearSpansOrdered(int allowedSlop, List<Spans> subSpans, ComboMode comboMode, int comboThreshold, boolean allowOverlap, List<List<RecordingPushbackSpans>> repeatGroups, List<RecordingPushbackSpans> noRepeat,
-      boolean combineRepeatSpans, Iterator<TermSpansRepeatBuffer> reuseInput, List<TermSpansRepeatBuffer> reuseOutput, boolean offsets, boolean supportVariableTermSpansLength,
+  private NearSpansOrdered(int allowedSlop, List<Spans> subSpans, ComboMode comboMode, boolean allowOverlap, List<List<RecordingPushbackSpans>> repeatGroups, List<RecordingPushbackSpans> noRepeat,
+      int combineRepeatGroupsThreshold, Iterator<TermSpansRepeatBuffer> reuseInput, List<TermSpansRepeatBuffer> reuseOutput, boolean offsets, boolean supportVariableTermSpansLength,
       Iterator<PositionDeque> reuseDequeInput, List<PositionDeque> reuseDequeOutput, List<Spans> shingles, boolean loop) throws IOException {
-    this(allowedSlop, wrapSpans(subSpans, allowedSlop, repeatGroups, noRepeat, combineRepeatSpans, reuseInput, reuseOutput, offsets, supportVariableTermSpansLength, comboMode,
-        reuseDequeInput, reuseDequeOutput), comboMode, comboThreshold, allowOverlap, repeatGroups, noRepeat,
-        combineRepeatSpans, supportVariableTermSpansLength, shingles, loop);
+    this(allowedSlop, wrapSpans(subSpans, allowedSlop, repeatGroups, noRepeat, combineRepeatGroupsThreshold, reuseInput, reuseOutput, offsets, supportVariableTermSpansLength, comboMode,
+        reuseDequeInput, reuseDequeOutput), comboMode, allowOverlap, repeatGroups, noRepeat,
+        combineRepeatGroupsThreshold, supportVariableTermSpansLength, shingles, loop);
   }
 
   private static final Comparator<RecordingPushbackSpans[]> ARRAY_SIZE_COMPARATOR = new Comparator<RecordingPushbackSpans[]>() {
@@ -938,8 +945,8 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
     }
   };
 
-  private NearSpansOrdered(int allowedSlop, RecordingPushbackSpans[] resettableSpans, ComboMode comboMode, int comboThreshold, boolean allowOverlap, List<List<RecordingPushbackSpans>> repeatGroups, List<RecordingPushbackSpans> noRepeat,
-      boolean combineRepeatGroups, boolean supportVariableTermSpansLength, List<Spans> shingles, boolean loop) throws IOException {
+  private NearSpansOrdered(int allowedSlop, RecordingPushbackSpans[] resettableSpans, ComboMode comboMode, boolean allowOverlap, List<List<RecordingPushbackSpans>> repeatGroups, List<RecordingPushbackSpans> noRepeat,
+      int combineRepeatGroupsThreshold, boolean supportVariableTermSpansLength, List<Spans> shingles, boolean loop) throws IOException {
     super(Arrays.asList(resettableSpans), shingles);
     this.loop = loop;
     if (repeatGroups.isEmpty()) {
@@ -987,7 +994,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
     }
     this.allowOverlap = allowOverlap;
     this.allowedSlop = allowedSlop;
-    this.combineRepeatGroups = combineRepeatGroups;
+    this.combineRepeatGroupsThreshold = combineRepeatGroupsThreshold;
     final IndexLookahead[] builder = new IndexLookahead[this.resettableSpans.length];
     for (int i = 0; i < this.resettableSpans.length; i++) {
       if ((builder[i] = this.resettableSpans[i].lookaheadBacking) == null) {
@@ -1113,6 +1120,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
     if (!initializedRepeatGroups) {
       for (final RecordingPushbackSpans[] repeatGroup : repeatGroups) {
         final RecordingPushbackSpans rps = repeatGroup[0];
+        final boolean combineRepeatGroups = combineRepeatGroupsThreshold <= repeatGroup.length;
         int freq = combineRepeatGroups ? ((RepeatTermSpans)rps.backing).backingSpans.freq : ((TermSpans)rps.backing).freq;
         if (freq < repeatGroup.length) {
           spansHead = NO_MORE_POSITIONS_ENTRY;
