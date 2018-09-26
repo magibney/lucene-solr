@@ -120,7 +120,7 @@ public class TestSpanCollection extends LuceneTestCase {
       TokenStreamComponents ret = backing.createComponents(fieldName);
       TokenStream result = new PositionLengthSetter(ret.getTokenStream());
       result = new PositionLengthOrderTokenFilter(result, ENCODE_LOOKAHEAD);
-      return new TokenStreamComponents(ret.getTokenizer(), result);
+      return new TokenStreamComponents(ret.getSource(), result);
     }
 
   }

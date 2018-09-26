@@ -159,7 +159,7 @@ public class TestTermSpans extends LuceneTestCase {
         case FIELD:
           filter = new ExpandingTokenFilter(components.getTokenStream());
           filter = new PositionLengthOrderTokenFilter(filter, ENCODE_LOOKAHEAD);
-          return new TokenStreamComponents(components.getTokenizer(), filter);
+          return new TokenStreamComponents(components.getSource(), filter);
         case FIELD2:
           filter = new WordDelimiterGraphFilter(components.getTokenStream(),
               WordDelimiterGraphFilter.GENERATE_WORD_PARTS
@@ -168,7 +168,7 @@ public class TestTermSpans extends LuceneTestCase {
               CharArraySet.EMPTY_SET);
           filter = new FlattenGraphFilterFactory(Collections.EMPTY_MAP).create(filter);
           filter = new PositionLengthOrderTokenFilter(filter, ENCODE_LOOKAHEAD);
-          return new TokenStreamComponents(components.getTokenizer(), filter);
+          return new TokenStreamComponents(components.getSource(), filter);
         default:
           throw new AssertionError();
       }
