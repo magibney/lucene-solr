@@ -401,8 +401,8 @@ public class TestSpanCollection extends LuceneTestCase {
     SpanTermQuery q3 = new SpanTermQuery(new Term(FIELD, "cy"));
     SpanTermQuery q4 = new SpanTermQuery(new Term(FIELD, "dy"));
     SpanNearQuery q = new SpanNearQuery(new SpanQuery[]{q1, q2, q3, q4}, 100, true,
-        SpanNearQuery.ComboMode.FULL_DISTILLED_PER_START_POSITION, SpanNearQuery.DEFAULT_COMBO_THRESHOLD, SpanNearQuery.DEFAULT_ALLOW_OVERLAP,
-        SpanNearQuery.DEFAULT_COMBINE_REPEAT_SPANS, true, null, null);
+        SpanNearQuery.ComboMode.FULL_DISTILLED_PER_START_POSITION, SpanNearQuery.DEFAULT_ALLOW_OVERLAP,
+        SpanNearQuery.DEFAULT_COMBINE_REPEAT_GROUPS_THRESHOLD, true, null, null);
     Spans spans = q.createWeight(searcher, ScoreMode.COMPLETE, 1f).getSpans(searcher.getIndexReader().leaves().get(0), SpanWeight.Postings.POSITIONS);
     int start;
     assertEquals(21, spans.advance(20));
@@ -454,8 +454,8 @@ public class TestSpanCollection extends LuceneTestCase {
     SpanTermQuery q3 = new SpanTermQuery(new Term(FIELD, "cx"));
     SpanTermQuery q4 = new SpanTermQuery(new Term(FIELD, "dx"));
     SpanNearQuery q = new SpanNearQuery(new SpanQuery[]{q1, q2, q3, q4}, 100, true,
-        SpanNearQuery.DEFAULT_COMBO_MODE, SpanNearQuery.DEFAULT_COMBO_THRESHOLD, SpanNearQuery.DEFAULT_ALLOW_OVERLAP,
-        SpanNearQuery.DEFAULT_COMBINE_REPEAT_SPANS, true, null, null);
+        SpanNearQuery.DEFAULT_COMBO_MODE, SpanNearQuery.DEFAULT_ALLOW_OVERLAP,
+        SpanNearQuery.DEFAULT_COMBINE_REPEAT_GROUPS_THRESHOLD, true, null, null);
     Spans spans = q.createWeight(searcher, ScoreMode.TOP_SCORES, 1f).getSpans(searcher.getIndexReader().leaves().get(0), SpanWeight.Postings.POSITIONS);
     assertEquals(Spans.NO_MORE_DOCS, spans.advance(20));
   }
@@ -857,7 +857,7 @@ public class TestSpanCollection extends LuceneTestCase {
     SpanTermQuery q2 = new SpanTermQuery(a);
     SpanTermQuery q3 = new SpanTermQuery(a);
     SpanTermQuery q4 = new SpanTermQuery(a);
-    SpanNearQuery q = new SpanNearQuery(new SpanQuery[]{q1, q2, q3, q4}, 5, true, SpanNearQuery.DEFAULT_COMBO_MODE, SpanNearQuery.DEFAULT_COMBO_THRESHOLD, SpanNearQuery.DEFAULT_ALLOW_OVERLAP, false);
+    SpanNearQuery q = new SpanNearQuery(new SpanQuery[]{q1, q2, q3, q4}, 5, true, SpanNearQuery.DEFAULT_COMBO_MODE, SpanNearQuery.DEFAULT_ALLOW_OVERLAP, Integer.MAX_VALUE);
     TermCollector collector = new TermCollector();
     Spans spans = q.createWeight(searcher, ScoreMode.COMPLETE_NO_SCORES, 1f).getSpans(searcher.getIndexReader().leaves().get(0), SpanWeight.Postings.POSITIONS);
     assertEquals(13, spans.advance(13));
@@ -888,7 +888,7 @@ public class TestSpanCollection extends LuceneTestCase {
     SpanTermQuery q3 = new SpanTermQuery(a);
     SpanTermQuery q4 = new SpanTermQuery(a);
     SpanTermQuery q5 = new SpanTermQuery(a);
-    SpanNearQuery q = new SpanNearQuery(new SpanQuery[]{q1, q2, q3, q4, q5}, 5, true, SpanNearQuery.ComboMode.FULL, 11, SpanNearQuery.DEFAULT_ALLOW_OVERLAP, false);
+    SpanNearQuery q = new SpanNearQuery(new SpanQuery[]{q1, q2, q3, q4, q5}, 5, true, SpanNearQuery.ComboMode.FULL, SpanNearQuery.DEFAULT_ALLOW_OVERLAP, Integer.MAX_VALUE);
     TermCollector collector = new TermCollector();
     Spans spans = q.createWeight(searcher, ScoreMode.COMPLETE_NO_SCORES, 1f).getSpans(searcher.getIndexReader().leaves().get(0), SpanWeight.Postings.POSITIONS);
     assertEquals(13, spans.advance(13));
@@ -910,7 +910,7 @@ public class TestSpanCollection extends LuceneTestCase {
     SpanTermQuery q3 = new SpanTermQuery(a);
     SpanTermQuery q4 = new SpanTermQuery(a);
     SpanTermQuery q5 = new SpanTermQuery(a);
-    SpanNearQuery q = new SpanNearQuery(new SpanQuery[]{q1, q2, q3, q4, q5}, 7, true, SpanNearQuery.ComboMode.MIN_END_POSITION, 16, true);
+    SpanNearQuery q = new SpanNearQuery(new SpanQuery[]{q1, q2, q3, q4, q5}, 7, true, SpanNearQuery.ComboMode.MIN_END_POSITION, true);
     TermCollector collector = new TermCollector();
     Spans spans = q.createWeight(searcher, ScoreMode.COMPLETE_NO_SCORES, 1f).getSpans(searcher.getIndexReader().leaves().get(0), SpanWeight.Postings.POSITIONS);
     assertEquals(13, spans.advance(13));
@@ -952,7 +952,7 @@ public class TestSpanCollection extends LuceneTestCase {
     }
     int slop = combinatorialTermCount * (combinatorialTermRepeat - 1);
     System.err.println("combinatorial slop = "+slop);
-    SpanNearQuery nearQuery = new SpanNearQuery(termQueries, slop, true, SpanNearQuery.ComboMode.FULL, Integer.MAX_VALUE);
+    SpanNearQuery nearQuery = new SpanNearQuery(termQueries, slop, true, SpanNearQuery.ComboMode.FULL);
     SpanWeight w = nearQuery.createWeight(searcher, ScoreMode.COMPLETE, 1f);
     LeafReaderContext ctx = searcher.getIndexReader().leaves().get(0);
     Spans spans = w.getSpans(ctx, SpanWeight.Postings.POSITIONS);
@@ -984,7 +984,7 @@ public class TestSpanCollection extends LuceneTestCase {
       termQueries[i] = new SpanTermQuery(new Term(FIELD, "e".concat(Integer.toString(i + 1))));
     }
     int slop = combinatorialTermCount * (combinatorialTermRepeat - 1) - 4;
-    SpanNearQuery nearQuery = new SpanNearQuery(termQueries, slop, true, SpanNearQuery.ComboMode.FULL, Integer.MAX_VALUE);
+    SpanNearQuery nearQuery = new SpanNearQuery(termQueries, slop, true, SpanNearQuery.ComboMode.FULL);
     SpanWeight w = nearQuery.createWeight(searcher, ScoreMode.COMPLETE, 1f);
     LeafReaderContext ctx = searcher.getIndexReader().leaves().get(0);
     Spans spans = w.getSpans(ctx, SpanWeight.Postings.POSITIONS);
@@ -1407,7 +1407,7 @@ public class TestSpanCollection extends LuceneTestCase {
     if (NARROW) return;
     SpanTermQuery q1 = new SpanTermQuery(new Term(FIELD, "t1"));
     SpanTermQuery q2 = new SpanTermQuery(new Term(FIELD, "t2"));
-    SpanNearQuery q3 = new SpanNearQuery(new SpanQuery[]{q1, q2}, 2, true, SpanNearQuery.DEFAULT_COMBO_MODE, SpanNearQuery.DEFAULT_COMBO_THRESHOLD, false);
+    SpanNearQuery q3 = new SpanNearQuery(new SpanQuery[]{q1, q2}, 2, true, SpanNearQuery.DEFAULT_COMBO_MODE, false);
     Spans spans = q3.createWeight(searcher, ScoreMode.COMPLETE_NO_SCORES, 1f).getSpans(searcher.getIndexReader().leaves().get(0), SpanWeight.Postings.POSITIONS);
     assertEquals(10, spans.advance(10));
     TermCollector collector = new TermCollector();
@@ -1636,13 +1636,13 @@ public class TestSpanCollection extends LuceneTestCase {
         SpanTermQuery q2 = new SpanTermQuery(new Term(FIELD, "ill"));
         SpanTermQuery q3 = new SpanTermQuery(new Term(FIELD, "be"));
         SpanNearQuery q = new SpanNearQuery(new SpanQuery[]{q1, q2, q3}, 1, true,
-            SpanNearQuery.DEFAULT_COMBO_MODE, SpanNearQuery.DEFAULT_COMBO_THRESHOLD, SpanNearQuery.DEFAULT_ALLOW_OVERLAP,
-            SpanNearQuery.DEFAULT_COMBINE_REPEAT_SPANS, true, null, null);
+            SpanNearQuery.DEFAULT_COMBO_MODE, SpanNearQuery.DEFAULT_ALLOW_OVERLAP,
+            SpanNearQuery.DEFAULT_COMBINE_REPEAT_GROUPS_THRESHOLD, true, null, null);
         TopDocs topDocs = searcher.search(q, 10);
         assertEquals(1, topDocs.totalHits.value);
         q = new SpanNearQuery(new SpanQuery[]{q1, q2, q3}, 1, true,
-            SpanNearQuery.DEFAULT_COMBO_MODE, SpanNearQuery.DEFAULT_COMBO_THRESHOLD, SpanNearQuery.DEFAULT_ALLOW_OVERLAP,
-            SpanNearQuery.DEFAULT_COMBINE_REPEAT_SPANS, false, null, null);
+            SpanNearQuery.DEFAULT_COMBO_MODE, SpanNearQuery.DEFAULT_ALLOW_OVERLAP,
+            SpanNearQuery.DEFAULT_COMBINE_REPEAT_GROUPS_THRESHOLD, false, null, null);
         topDocs = searcher.search(q, 10);
         assertEquals(1, topDocs.totalHits.value);
       }

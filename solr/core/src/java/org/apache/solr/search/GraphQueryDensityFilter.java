@@ -40,6 +40,7 @@ import org.apache.lucene.search.spans.SpanQuery;
 import org.apache.lucene.search.spans.SpanTermQuery;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefBuilder;
+import org.apache.solr.common.params.SolrParams;
 import org.apache.solr.common.util.NamedList;
 import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.search.ExtendedDismaxQParser.GraphQueryFilter;
@@ -49,12 +50,25 @@ import org.apache.solr.search.ExtendedDismaxQParser.GraphQueryFilter;
  */
 public class GraphQueryDensityFilter implements GraphQueryFilter {
 
+  private static final String SHINGLE_WORDS_ARGNAME = "shingleWords";
+  private static final String MAX_SUPPORTED_SLOP_ARGNAME = "maxSupportedSlop";
+  private static final String DENSE_FIELDS_ARGNAME = "denseFields";
+  private static final String ALLOW_OVERLAP_ARGNAME = "allowOverlap";
+  private static final String COMBINE_REPEAT_GROUPS_THRESHOLD_ARGNAME = "combineRepeatGroupsThreshold";
+  private static final String SUPPORT_VARIABLE_TERM_SPANS_LENGTH_ARGNAME = "supportVariableTermSpansLength";
+  private static final String COMBO_MODE_ARGNAME = "comboMode";
+  private static final String DENSE_CLAUSE_NO_OVERLAP_THRESHOLD_ARGNAME = "denseClauseNoOverlapThreshold";
   private static final int DEFAULT_DENSE_CLAUSE_NO_OVERLAP_THRESHOLD = Integer.MAX_VALUE; //5?
+  public static final String MAX_DENSE_CLAUSES_ARGNAME = "maxDenseClauses";
   private static final int DEFAULT_MAX_DENSE_CLAUSES = Integer.MAX_VALUE; //10?
+  public static final String MAX_CLAUSES_ARGNAME = "maxClauses";
   private static final int DEFAULT_MAX_CLAUSES = Integer.MAX_VALUE; //1000?
   private static final int DEFAULT_MAX_SUPPORTED_SLOP = Integer.MAX_VALUE; //100?
+  private static final String USE_LEGACY_IMPLEMENTATION_ARGNAME = "useLegacyImplementation";
   private static final boolean DEFAULT_USE_LEGACY_IMPLEMENTATION = false;
+  private static final String USE_LOOP_IMPLEMENTATION_ARGNAME = "useLoopImplementation";
   private static final boolean DEFAULT_USE_LOOP_IMPLEMENTATION = true;
+  public static final String MAKE_OUTER_GREEDY_ARGNAME = "makeOuterGreedy";
   private static final boolean DEFAULT_MAKE_OUTER_GREEDY = false;
   private boolean useLegacyImplementation;
   private boolean useLoopImplementation;
@@ -64,46 +78,43 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
   private int maxClauses;
   private int maxSupportedSlop;
   private ShingleWords shingleWords;
-  private boolean combineRepeatSpans;
+  private int combineRepeatGroupsThreshold;
   private ComboMode comboMode;
   private boolean makeOuterGreedy;
   private boolean allowOverlap;
   private int denseClauseNoOverlapThreshold;
-  private int comboThreshold;
   private boolean supportVariableTermSpansLength;
   private Map<String, Map<BytesRef, DensityEntry>> densityLookup;
 
   @Override
   public void init(NamedList args, ResourceLoader loader) {
-    denseFields = (NamedList<Integer>)args.remove("denseFields");
-    Object tmp = args.remove("maxDenseClauses");
+    denseFields = (NamedList<Integer>)args.remove(DENSE_FIELDS_ARGNAME);
+    Object tmp = args.remove(MAX_DENSE_CLAUSES_ARGNAME);
     this.maxDenseClauses = tmp == null ? DEFAULT_MAX_DENSE_CLAUSES : (Integer)tmp;
-    tmp = args.remove("denseClauseNoOverlapThreshold");
+    tmp = args.remove(DENSE_CLAUSE_NO_OVERLAP_THRESHOLD_ARGNAME);
     this.denseClauseNoOverlapThreshold = tmp == null ? DEFAULT_DENSE_CLAUSE_NO_OVERLAP_THRESHOLD : (Integer)tmp;
-    tmp = args.remove("maxClauses");
+    tmp = args.remove(MAX_CLAUSES_ARGNAME);
     this.maxClauses = tmp == null ? DEFAULT_MAX_CLAUSES : (Integer)tmp;
-    tmp = args.remove("maxSupportedSlop");
+    tmp = args.remove(MAX_SUPPORTED_SLOP_ARGNAME);
     this.maxSupportedSlop = tmp == null ? DEFAULT_MAX_SUPPORTED_SLOP : (Integer)tmp;
-    Boolean tmpBool = args.removeBooleanArg("combineRepeatSpans");
-    this.combineRepeatSpans = tmpBool == null ? SpanNearQuery.DEFAULT_COMBINE_REPEAT_SPANS : tmpBool;
-    tmp = args.remove("comboMode");
+    Boolean tmpBool = args.removeBooleanArg(COMBINE_REPEAT_GROUPS_THRESHOLD_ARGNAME);
+    this.combineRepeatGroupsThreshold = tmp == null ? SpanNearQuery.DEFAULT_COMBINE_REPEAT_GROUPS_THRESHOLD : (Integer)tmp;
+    tmp = args.remove(COMBO_MODE_ARGNAME);
     this.comboMode = tmp == null ? SpanNearQuery.DEFAULT_COMBO_MODE : ComboMode.valueOf((String)tmp);
-    tmpBool = args.removeBooleanArg("allowOverlap");
+    tmpBool = args.removeBooleanArg(ALLOW_OVERLAP_ARGNAME);
     this.allowOverlap = tmpBool == null ? SpanNearQuery.DEFAULT_ALLOW_OVERLAP : tmpBool;
-    tmpBool = args.removeBooleanArg("supportVariableTermSpansLength");
+    tmpBool = args.removeBooleanArg(SUPPORT_VARIABLE_TERM_SPANS_LENGTH_ARGNAME);
     this.supportVariableTermSpansLength = tmpBool == null ? SpanNearQuery.DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH : tmpBool;
-    tmp = args.remove("comboThreshold");
-    this.comboThreshold = tmp == null ? SpanNearQuery.DEFAULT_COMBO_THRESHOLD : (Integer)tmp;
-    tmp = args.remove("shingleWords");
+    tmp = args.remove(SHINGLE_WORDS_ARGNAME);
     try {
       this.shingleWords = tmp == null ? null : ShingleWords.newInstance((NamedList<Object>)tmp, loader);
     } catch (IOException ex) {
       ex.printStackTrace(System.err);
       this.shingleWords = null;
     }
-    useLegacyImplementation = (tmpBool = args.removeBooleanArg("useLegacyImplementation")) == null ? DEFAULT_USE_LEGACY_IMPLEMENTATION : tmpBool;
-    useLoopImplementation = (tmpBool = args.removeBooleanArg("useLoopImplementation")) == null ? DEFAULT_USE_LOOP_IMPLEMENTATION : tmpBool;
-    makeOuterGreedy = (tmpBool = args.removeBooleanArg("makeOuterGreedy")) == null ? DEFAULT_MAKE_OUTER_GREEDY : tmpBool;
+    useLegacyImplementation = (tmpBool = args.removeBooleanArg(USE_LEGACY_IMPLEMENTATION_ARGNAME)) == null ? DEFAULT_USE_LEGACY_IMPLEMENTATION : tmpBool;
+    useLoopImplementation = (tmpBool = args.removeBooleanArg(USE_LOOP_IMPLEMENTATION_ARGNAME)) == null ? DEFAULT_USE_LOOP_IMPLEMENTATION : tmpBool;
+    makeOuterGreedy = (tmpBool = args.removeBooleanArg(MAKE_OUTER_GREEDY_ARGNAME)) == null ? DEFAULT_MAKE_OUTER_GREEDY : tmpBool;
   }
 
   @Override
@@ -236,17 +247,17 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
     return (density * docCount) / ((maxDoc + 1000) / 1000);
   }
 
-  private SpanOrQuery filter(SpanOrQuery q, int depth) throws SyntaxError {
+  private static SpanOrQuery filter(SpanOrQuery q, int depth, FilterConfig c) throws SyntaxError {
     final SpanQuery[] clauses = q.getClauses();
     boolean modified = false;
     for (int i = clauses.length - 1; i >= 0; i--) {
       final SpanQuery subQ = clauses[i];
       final SpanQuery newSubQ;
       if (subQ instanceof SpanOrQuery) {
-        newSubQ = filter((SpanOrQuery)subQ, depth + 1);
+        newSubQ = filter((SpanOrQuery)subQ, depth + 1, c);
       } else if (subQ instanceof SpanNearQuery) {
         SpanNearQuery snq = (SpanNearQuery) subQ;
-        newSubQ = filter(snq, snq.getSlop(), 0, depth + 1);
+        newSubQ = filter(snq, snq.getSlop(), 0, depth + 1, c);
       } else {
         continue;
       }
@@ -262,22 +273,117 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
 
   private static final byte NULL_BYTE = (byte)0;
   @Override
-  public SpanQuery filter(SpanNearQuery snq, int slop, int minClauseSize) throws SyntaxError {
-    return filter(snq, slop, minClauseSize, 0);
+  public SpanQuery filter(SpanNearQuery snq, int slop, int minClauseSize, SolrParams params) throws SyntaxError {
+    return filter(snq, slop, minClauseSize, 0, new FilterConfig(params));
   }
 
-  public SpanQuery filter(SpanNearQuery snq, int slop, int minClauseSize, int depth) throws SyntaxError {
+  private final class FilterConfig {
+    private Boolean skipDensityCheck = null;
+    private final Map<String, Map<BytesRef, DensityEntry>> densityLookup;
+    private Boolean skipShingleWords = null;
+    private final ShingleWords shingleWords;
+    private final int maxSupportedSlop;
+    private final SolrParams params;
+    private int maxClauses = Integer.MIN_VALUE;
+    private int maxDenseClauses = Integer.MIN_VALUE;
+    private int denseClauseNoOverlapThreshold = Integer.MIN_VALUE;
+    private Boolean makeOuterGreedy = null;
+    private Boolean allowOverlap = null;
+    private int combineRepeatGroupsThreshold = Integer.MIN_VALUE;
+    private Boolean supportVariableTermSpansLength = null;
+    private Boolean useLegacyImplementation = null;
+    private Boolean useLoopImplementation = null;
+    private ComboMode comboMode = null;
+    private FilterConfig(SolrParams params) {
+      this.params = params;
+      this.shingleWords = GraphQueryDensityFilter.this.shingleWords;
+      this.maxSupportedSlop = GraphQueryDensityFilter.this.maxSupportedSlop;
+      this.densityLookup = GraphQueryDensityFilter.this.densityLookup;
+    }
+    private Map<String, Map<BytesRef, DensityEntry>> densityLookup() {
+      if (densityLookup == null) {
+        return null;
+      } else if (skipDensityCheck == null) {
+        String tmp = params.get(DENSE_FIELDS_ARGNAME);
+        if (tmp != null && tmp.isEmpty()) {
+          skipDensityCheck = true;
+          return null;
+        } else {
+          skipDensityCheck = false;
+          return densityLookup;
+        }
+      } else if (skipDensityCheck) {
+        return null;
+      } else {
+        return densityLookup;
+      }
+    }
+    private ShingleWords shingleWords() {
+      if (shingleWords == null) {
+        return null;
+      } else if (skipShingleWords == null) {
+        String tmp = params.get(SHINGLE_WORDS_ARGNAME);
+        if (tmp != null && tmp.isEmpty()) {
+          skipShingleWords = true;
+          return null;
+        } else {
+          skipShingleWords = false;
+          return shingleWords;
+        }
+      } else if (skipShingleWords) {
+        return null;
+      } else {
+        return shingleWords;
+      }
+    }
+    private int maxClauses() {
+      return maxClauses == Integer.MIN_VALUE ? (maxClauses = params.getInt(MAX_CLAUSES_ARGNAME, GraphQueryDensityFilter.this.maxClauses)) : maxClauses;
+    }
+    private boolean makeOuterGreedy() {
+      return makeOuterGreedy == null ? (makeOuterGreedy = params.getBool(MAKE_OUTER_GREEDY_ARGNAME, GraphQueryDensityFilter.this.makeOuterGreedy)) : makeOuterGreedy;
+    }
+    private ComboMode comboMode() {
+      if (comboMode != null) {
+        return comboMode;
+      } else {
+        String tmp = params.get(COMBO_MODE_ARGNAME);
+        return comboMode = ((tmp == null || tmp.isEmpty()) ? GraphQueryDensityFilter.this.comboMode : ComboMode.valueOf(tmp));
+      }
+    }
+    private int maxDenseClauses() {
+      return maxDenseClauses == Integer.MIN_VALUE ? (maxDenseClauses = params.getInt(MAX_DENSE_CLAUSES_ARGNAME, GraphQueryDensityFilter.this.maxDenseClauses)) : maxDenseClauses;
+    }
+    private boolean allowOverlap() {
+      return allowOverlap == null ? (allowOverlap = params.getBool(ALLOW_OVERLAP_ARGNAME, GraphQueryDensityFilter.this.allowOverlap)) : allowOverlap;
+    }
+    private int combineRepeatSpans() {
+      return combineRepeatGroupsThreshold == Integer.MIN_VALUE ? (combineRepeatGroupsThreshold = params.getInt(COMBINE_REPEAT_GROUPS_THRESHOLD_ARGNAME, GraphQueryDensityFilter.this.combineRepeatGroupsThreshold)) : combineRepeatGroupsThreshold;
+    }
+    private boolean supportVariableTermSpansLength() {
+      return supportVariableTermSpansLength == null ? (supportVariableTermSpansLength = params.getBool(SUPPORT_VARIABLE_TERM_SPANS_LENGTH_ARGNAME, GraphQueryDensityFilter.this.supportVariableTermSpansLength)) : supportVariableTermSpansLength;
+    }
+    private boolean useLegacyImplementation() {
+      return useLegacyImplementation == null ? (useLegacyImplementation = params.getBool(USE_LEGACY_IMPLEMENTATION_ARGNAME, GraphQueryDensityFilter.this.useLegacyImplementation)) : useLegacyImplementation;
+    }
+     private boolean useLoopImplementation() {
+      return useLoopImplementation == null ? (useLoopImplementation = params.getBool(USE_LOOP_IMPLEMENTATION_ARGNAME, GraphQueryDensityFilter.this.useLoopImplementation)) : useLoopImplementation;
+    }
+    private int denseClauseNoOverlapThreshold() {
+      return denseClauseNoOverlapThreshold == Integer.MIN_VALUE ? (denseClauseNoOverlapThreshold = params.getInt(DENSE_CLAUSE_NO_OVERLAP_THRESHOLD_ARGNAME, GraphQueryDensityFilter.this.denseClauseNoOverlapThreshold)) : denseClauseNoOverlapThreshold;
+    }
+}
+  private static SpanQuery filter(SpanNearQuery snq, int slop, int minClauseSize, int depth, FilterConfig c) throws SyntaxError {
     SpanQuery[] clauses = snq.getClauses();
     if (minClauseSize > 1 && clauses.length < minClauseSize) {
       return null;
     }
-    if (clauses.length > maxClauses) {
+    if (clauses.length > c.maxClauses()) {
       return null;
     }
-    if (slop <= 0 && shingleWords == null) {
+    if (slop <= 0 && c.shingleWords() == null) {
       return snq;
     } else {
-      if (slop > maxSupportedSlop) {
+      if (slop > c.maxSupportedSlop) {
         return null;
       }
       if (clauses.length <= 0 || !snq.isInOrder()) {
@@ -285,16 +391,18 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
       } else {
         final boolean explicitPhraseQuery = minClauseSize == 0; // we might want to do something based on this.
         final String field = snq.getField();
-        final ComboMode effectiveComboMode = makeOuterGreedy && depth == 0 ? ComboMode.GREEDY_END_POSITION : comboMode;
+        final ComboMode effectiveComboMode = c.makeOuterGreedy() && depth == 0 ? ComboMode.GREEDY_END_POSITION : c.comboMode();
+        final Map<String, Map<BytesRef, DensityEntry>> densityLookup = c.densityLookup();
         final Map<BytesRef, DensityEntry> densityEntry = densityLookup == null ? null : densityLookup.get(field);
         SpanNearQuery.Builder builder = new SpanNearQuery.Builder(field, snq.isInOrder(), effectiveComboMode,
-            SpanNearQuery.DEFAULT_COMBO_THRESHOLD, allowOverlap, combineRepeatSpans, supportVariableTermSpansLength);
+            c.allowOverlap(), c.combineRepeatSpans(), c.supportVariableTermSpansLength());
         final BytesRefBuilder brb = new BytesRefBuilder();
         int denseTermCount = 0;
         final Words<BytesRef> tmp;
         final Set<BytesRef> shingleWordsForField;
         final Set<BytesRef> shingles;
         final String shingleFieldSuffix;
+        final ShingleWords shingleWords = c.shingleWords();
         if (shingleWords == null || slop > shingleWords.maxShingleSlop) {
           shingleWordsForField = null;
           shingles = null;
@@ -330,12 +438,12 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
             }
           } else if (sq instanceof SpanNearQuery) {
             SpanNearQuery subSnq = (SpanNearQuery) sq;
-            sq = filter(subSnq, subSnq.getSlop(), 0, depth + 1);
+            sq = filter(subSnq, subSnq.getSlop(), 0, depth + 1, c);
             if (sq == null) {
               return null;
             }
           } else if (sq instanceof SpanOrQuery) {
-            sq = filter((SpanOrQuery)sq, depth + 1);
+            sq = filter((SpanOrQuery)sq, depth + 1, c);
             if (sq == null) {
               return null;
             }
@@ -345,19 +453,19 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
           lastTermShingle = termShingle;
         }
         if (denseTermCount == clauses.length) {
-          if (denseTermCount > maxDenseClauses) {
+          if (denseTermCount > c.maxDenseClauses()) {
             return null;
           }
           builder = new SpanNearQuery.Builder(field, snq.isInOrder(), ComboMode.GREEDY_END_POSITION,
-              comboThreshold, denseTermCount > denseClauseNoOverlapThreshold ? false : allowOverlap,
-              combineRepeatSpans, supportVariableTermSpansLength);
+              denseTermCount > c.denseClauseNoOverlapThreshold() ? false : c.allowOverlap(),
+              c.combineRepeatSpans(), c.supportVariableTermSpansLength());
           for (int i = 0; i < clauses.length; i++) {
             builder.addClause(clauses[i]);
           }
         }
         builder.setSlop(slop);
-        builder.setLegacyImplementation(useLegacyImplementation);
-        builder.setLoopImplementation(useLoopImplementation);
+        builder.setLegacyImplementation(c.useLegacyImplementation());
+        builder.setLoopImplementation(c.useLoopImplementation());
         if (shingles != null) {
           builder.setShingles(shingleFieldSuffix, shingles);
         }
