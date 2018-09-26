@@ -4,7 +4,22 @@ For more information on past and future Lucene versions, please see:
 http://s.apache.org/luceneversions
 
 ======================= Lucene 7.6.0 =======================
-(No Changes)
+
+Build
+
+* LUCENE-8504: Upgrade forbiddenapis to version 2.6.  (Uwe Schindler)
+
+* LUCENE-8498: Deprecate LowerCaseTokenizer and CharTokenizer static methods
+  that take normalizer functions (Alan Woodward)
+
+* LUCENE-8493: Stop publishing insecure .sha1 files with releases (janhoy)
+
+======================= Lucene 7.5.1 =======================
+
+Bug Fixes:
+
+* LUCENE-8454: Fix incorrect vertex indexing and other computation errors in
+  shape tessellation that would sometimes cause an infinite loop. (Nick Knize)
 
 ======================= Lucene 7.5.0 =======================
 
@@ -108,6 +123,10 @@ Bug Fixes:
 * LUCENE-8466: IndexWriter.deleteDocs(Query... query) incorrectly applies deletes on flush
   if the index is sorted. (Adrien Grand, Jim Ferenczi, Vish Ramachandran)
 
+* LUCENE-8502: Allow access to delegate in FilterCodecReader. FilterCodecReader didn't 
+  allow access to it's delegate like other filter readers. This adds a new #getDelegate method
+  to access the wrapped reader. (Simon Willnauer)
+
 Changes in Runtime Behavior:
 
 * LUCENE-7976: TieredMergePolicy now respects maxSegmentSizeMB by default when executing
@@ -116,6 +135,11 @@ Changes in Runtime Behavior:
 * LUCENE-8263: TieredMergePolicy now reclaims deleted documents more
   aggressively by default ensuring that no more than ~1/3 of the index size is
   used by deleted documents. (Adrien Grand)
+
+* LUCENE-8503: Call #getDelegate instead of direct member access during unwrap. 
+  Filter*Reader instances access the member or the delegate directly instead of 
+  calling getDelegate(). In order to track access of the delegate these methods
+  should call #getDelegate() (Simon Willnauer)
 
 Improvements
 
@@ -3042,7 +3066,7 @@ Other
 
 * LUCENE-6845: SpanScorer is now merged into Spans (Alan Woodward, David Smiley)
 
-* LUCENE-6887: DefaultSimilarity is deprecated, use ClassicSimilarity for equivilent behavior,
+* LUCENE-6887: DefaultSimilarity is deprecated, use ClassicSimilarity for equivalent behavior,
   or consider switching to BM25Similarity which will become the new default in Lucene 6.0 (hossman)
 
 * LUCENE-6893: factor out CorePlusQueriesParser from CorePlusExtensionsParser
