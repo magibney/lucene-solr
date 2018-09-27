@@ -19,7 +19,6 @@ package org.apache.lucene.analysis.miscellaneous;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
@@ -35,23 +34,11 @@ import org.apache.lucene.analysis.Token;
 import org.apache.lucene.analysis.TokenFilter;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.Tokenizer;
-import org.apache.lucene.analysis.core.FlattenGraphFilter;
 import org.apache.lucene.analysis.core.KeywordTokenizer;
 import org.apache.lucene.analysis.en.EnglishAnalyzer;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
-import org.apache.lucene.document.Document;
-import org.apache.lucene.document.Field;
-import org.apache.lucene.document.TextField;
-import org.apache.lucene.index.DirectoryReader;
-import org.apache.lucene.index.IndexWriter;
-import org.apache.lucene.index.IndexWriterConfig;
-import org.apache.lucene.search.IndexSearcher;
-import org.apache.lucene.search.Query;
-import org.apache.lucene.search.TopDocs;
-import org.apache.lucene.store.RAMDirectory;
 import org.apache.lucene.util.IOUtils;
-import org.apache.lucene.util.QueryBuilder;
 import org.apache.lucene.util.TestUtil;
 
 import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.CATENATE_ALL;
@@ -59,6 +46,7 @@ import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.
 import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.CATENATE_WORDS;
 import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.GENERATE_NUMBER_PARTS;
 import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.GENERATE_WORD_PARTS;
+import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.IGNORE_KEYWORDS;
 import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.PRESERVE_ORIGINAL;
 import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.SPLIT_ON_CASE_CHANGE;
 import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.SPLIT_ON_NUMERICS;
@@ -354,51 +342,39 @@ public class TestWordDelimiterGraphFilter extends BaseTokenStreamTestCase {
 
     IOUtils.close(a, a2, a3, a4);
   }
-
-  public void testLucene7848() throws Exception {
-    CharArraySet protWords = new CharArraySet(Collections.emptySet(), false);
-
-    Analyzer searchAnalyzer = new Analyzer() {
-      @Override
-      public TokenStreamComponents createComponents(String field) {
-        Tokenizer tokenizer = new MockTokenizer(MockTokenizer.WHITESPACE, false);
-        return new TokenStreamComponents(tokenizer,
-            new WordDelimiterGraphFilter(tokenizer, GENERATE_WORD_PARTS | PRESERVE_ORIGINAL | GENERATE_NUMBER_PARTS | STEM_ENGLISH_POSSESSIVE, protWords));
-      }
-    };
-
-    Analyzer indexingAnalyzer = new Analyzer() {
-      @Override
-      public TokenStreamComponents createComponents(String field) {
-        Tokenizer tokenizer = new MockTokenizer(MockTokenizer.WHITESPACE, false);
-        TokenStream filter = new WordDelimiterGraphFilter(tokenizer, GENERATE_WORD_PARTS | PRESERVE_ORIGINAL | GENERATE_NUMBER_PARTS | STEM_ENGLISH_POSSESSIVE, protWords);
-        filter = new FlattenGraphFilter(filter);
-        return new TokenStreamComponents(tokenizer, filter);
-      }
-    };
-
-    String input = "SPECIAL PROJECTS - xxx,SPECIAL PROJECTS -- yyy";
-    String field = "field";
-    IndexWriterConfig config = new IndexWriterConfig(indexingAnalyzer);
-    try (IndexWriter w = new IndexWriter(new RAMDirectory(), config)) {
-      Document doc = new Document();
-      doc.add(new TextField(field, input, Field.Store.YES));
-      w.addDocument(doc);
-      w.commit();
-
-      try (DirectoryReader reader = DirectoryReader.open(w, true, true)) {
-        IndexSearcher searcher = new IndexSearcher(reader);
-        Query q = new QueryBuilder(searchAnalyzer).createPhraseQuery(field, input);
-        TopDocs topDocs = searcher.search(q, 10);
-        try {
-          assertEquals(1, topDocs.totalHits);
-        } catch (AssertionError er) {
-          throw er;
-        }
-      }
-    }
-  }
   
+  public void testKeywordFilter() throws Exception {
+    assertAnalyzesTo(keywordTestAnalyzer(GENERATE_WORD_PARTS),
+                     "abc-def klm-nop kpop",
+                     new String[] {"abc", "def", "klm", "nop", "kpop"});
+    assertAnalyzesTo(keywordTestAnalyzer(GENERATE_WORD_PARTS | IGNORE_KEYWORDS),
+                     "abc-def klm-nop kpop",
+                     new String[] {"abc", "def", "klm-nop", "kpop"},
+                     new int[]{0, 4, 8, 16},
+                     new int[]{3, 7, 15, 20},
+                     null,
+                     new int[]{1, 1, 1, 1},
+                     null,
+                     false);
+  }
+
+  private Analyzer keywordTestAnalyzer(int flags) throws Exception {
+    return new Analyzer() {
+      @Override
+      public TokenStreamComponents createComponents(String field) {
+        Tokenizer tokenizer = new MockTokenizer(MockTokenizer.WHITESPACE, false);
+        KeywordMarkerFilter kFilter = new KeywordMarkerFilter(tokenizer) {
+          private final CharTermAttribute term = addAttribute(CharTermAttribute.class);
+          @Override public boolean isKeyword() {
+            // Marks terms starting with the letter 'k' as keywords
+            return term.toString().charAt(0) == 'k';
+          }
+        };
+        return new TokenStreamComponents(tokenizer, new WordDelimiterGraphFilter(kFilter, flags, null));
+      }
+    };
+  }
+
   /** concat numbers + words + all */
   public void testLotsOfConcatenating() throws Exception {
     final int flags = GENERATE_WORD_PARTS | GENERATE_NUMBER_PARTS | CATENATE_WORDS | CATENATE_NUMBERS | CATENATE_ALL | SPLIT_ON_CASE_CHANGE | SPLIT_ON_NUMERICS | STEM_ENGLISH_POSSESSIVE;    
