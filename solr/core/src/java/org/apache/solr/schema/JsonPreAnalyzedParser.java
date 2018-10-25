@@ -177,7 +177,7 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
             try {
               posLength = Integer.parseInt(String.valueOf(obj));
             } catch (NumberFormatException nfe) {
-              LOG.warn("Invalid " + POSLENGTH_KEY + " attribute, skipped: '" + obj + "'");
+              log.warn("Invalid " + POSLENGTH_KEY + " attribute, skipped: '" + obj + "'");
             }
           }
           PositionLengthAttribute platt = parent.addAttribute(PositionLengthAttribute.class);
@@ -194,7 +194,7 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
             TermFrequencyAttribute tfAtt = parent.addAttribute(TermFrequencyAttribute.class);
             tfAtt.setTermFrequency(termFrequency);
           } catch (NumberFormatException nfe) {
-            LOG.warn("Invalid " + TERM_FREQUENCY_KEY + " attribute, skipped: '" + obj + "'");
+            log.warn("Invalid " + TERM_FREQUENCY_KEY + " attribute, skipped: '" + obj + "'");
           }
         } else if (key.equals(KEYWORD_KEY)) {
           Object obj = e.getValue();
