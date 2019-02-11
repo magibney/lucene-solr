@@ -60,6 +60,7 @@ public class QueryBuilder {
   protected Analyzer analyzer;
   protected boolean enablePositionIncrements = true;
   protected boolean enableGraphQueries = true;
+  protected boolean useSpansForGraphQueries = false;
   protected boolean autoGenerateMultiTermSynonymsPhraseQuery = false;
 
   /** Creates a new QueryBuilder using the given analyzer. */
@@ -547,7 +548,7 @@ public class QueryBuilder {
       throws IOException {
     source.reset();
     GraphTokenStreamFiniteStrings graph = new GraphTokenStreamFiniteStrings(source);
-    if (phraseSlop > 0) {
+    if (!useSpansForGraphQueries && phraseSlop > 0) {
       /**
        * Creates a boolean query from the graph token stream by extracting all the finite strings from the graph
        * and using them to create phrase queries with the appropriate slop.
