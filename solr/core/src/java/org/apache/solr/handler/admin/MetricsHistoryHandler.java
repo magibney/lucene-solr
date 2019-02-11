@@ -297,7 +297,7 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
   }
 
   public void removeHistory(String registry) throws IOException {
-    registry = SolrMetricManager.overridableRegistryName(registry);
+    registry = SolrMetricManager.enforcePrefix(registry);
     knownDbs.remove(registry);
     factory.remove(registry);
   }
@@ -586,7 +586,7 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
   }
 
   private RrdDef createDef(String registry, Group group) {
-    registry = SolrMetricManager.overridableRegistryName(registry);
+    registry = SolrMetricManager.enforcePrefix(registry);
 
     // base sampling period is collectPeriod - samples more frequent than
     // that will be dropped, samples less frequent will be interpolated
@@ -642,7 +642,17 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
   public void close() {
     log.debug("Closing " + hashCode());
     if (collectService != null) {
-      collectService.shutdownNow();
+      boolean shutdown = false;
+      while (!shutdown) {
+        try {
+          // Wait a while for existing tasks to terminate
+          collectService.shutdownNow();
+          shutdown = collectService.awaitTermination(5, TimeUnit.SECONDS);
+        } catch (InterruptedException ie) {
+          // Preserve interrupt status
+          Thread.currentThread().interrupt();
+        }
+      }
     }
     if (factory != null) {
       factory.close();

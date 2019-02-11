@@ -34,10 +34,8 @@ import java.util.stream.Collectors;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.solr.client.solrj.cloud.SolrCloudManager;
-import org.apache.solr.client.solrj.cloud.autoscaling.Policy;
 import org.apache.solr.client.solrj.cloud.autoscaling.PolicyHelper;
 import org.apache.solr.cloud.ActiveReplicaWatcher;
-import org.apache.solr.cloud.CloudUtil;
 import org.apache.solr.cloud.Overseer;
 import org.apache.solr.common.SolrCloseableLatch;
 import org.apache.solr.common.SolrException;
@@ -75,6 +73,12 @@ import static org.apache.solr.common.params.CommonAdminParams.WAIT_FOR_FINAL_STA
 
 public class AddReplicaCmd implements OverseerCollectionMessageHandler.Cmd {
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
+
+  /**
+   * When AddReplica is called with this set to true, then we do not try to find node assignments
+   * for the add replica API. If set to true, a valid "node" should be specified.
+   */
+  public static final String SKIP_NODE_ASSIGNMENT = "skipNodeAssignment";
 
   private final OverseerCollectionMessageHandler ocmh;
 
@@ -137,10 +141,17 @@ public class AddReplicaCmd implements OverseerCollectionMessageHandler.Cmd {
     }
 
     AtomicReference<PolicyHelper.SessionWrapper> sessionWrapper = new AtomicReference<>();
-    List<CreateReplica> createReplicas = buildReplicaPositions(ocmh.cloudManager, clusterState, collectionName, message, replicaTypesVsCount, sessionWrapper)
-        .stream()
-        .map(replicaPosition -> assignReplicaDetails(ocmh.cloudManager, clusterState, message, replicaPosition))
-        .collect(Collectors.toList());
+    List<CreateReplica> createReplicas;
+    try {
+      createReplicas = buildReplicaPositions(ocmh.cloudManager, clusterState, collectionName, message, replicaTypesVsCount, sessionWrapper)
+          .stream()
+          .map(replicaPosition -> assignReplicaDetails(ocmh.cloudManager, clusterState, message, replicaPosition))
+          .collect(Collectors.toList());
+    } finally {
+      if (sessionWrapper.get() != null) {
+        sessionWrapper.get().release();
+      }
+    }
 
     ShardHandler shardHandler = ocmh.shardHandlerFactory.getShardHandler();
     ZkStateReader zkStateReader = ocmh.zkStateReader;
@@ -157,10 +168,6 @@ public class AddReplicaCmd implements OverseerCollectionMessageHandler.Cmd {
       ocmh.processResponses(results, shardHandler, true, "ADDREPLICA failed to create replica", asyncId, requestMap);
       for (CreateReplica replica : createReplicas) {
         ocmh.waitForCoreNodeName(collectionName, replica.node, replica.coreName);
-      }
-
-      if (sessionWrapper.get() != null) {
-        sessionWrapper.get().release();
       }
       if (onComplete != null) onComplete.run();
     };
@@ -213,6 +220,8 @@ public class AddReplicaCmd implements OverseerCollectionMessageHandler.Cmd {
             ZkStateReader.COLLECTION_PROP, withCollectionName,
             ZkStateReader.SHARD_ID_PROP, withCollectionShard,
             "node", createReplica.node,
+            // since we already computed node assignments (which include assigning a node for this withCollection replica) we want to skip the assignment step
+            SKIP_NODE_ASSIGNMENT, "true",
             CommonAdminParams.WAIT_FOR_FINAL_STATE, Boolean.TRUE.toString()); // set to true because we want `withCollection` to be ready after this collection is created
         addReplica(clusterState, props, results, null);
       }
@@ -236,7 +245,7 @@ public class AddReplicaCmd implements OverseerCollectionMessageHandler.Cmd {
           props = props.plus(ZkStateReader.CORE_NODE_NAME_PROP, createReplica.coreNodeName);
         }
         try {
-          Overseer.getStateUpdateQueue(zkStateReader.getZkClient()).offer(Utils.toJSON(props));
+          ocmh.overseer.offerStateUpdate(Utils.toJSON(props));
         } catch (Exception e) {
           throw new SolrException(SolrException.ErrorCode.SERVER_ERROR, "Exception updating Overseer state queue", e);
         }
@@ -300,7 +309,7 @@ public class AddReplicaCmd implements OverseerCollectionMessageHandler.Cmd {
       coreName = message.getStr(CoreAdminParams.PROPERTY_PREFIX + CoreAdminParams.NAME);
     }
 
-    log.info("Node Identified {} for creating new replica of shard {}", node, shard);
+    log.info("Node Identified {} for creating new replica of shard {} for collection {}", node, shard, collection);
     if (!clusterState.liveNodesContain(node)) {
       throw new SolrException(SolrException.ErrorCode.BAD_REQUEST, "Node: " + node + " is not live");
     }
@@ -319,6 +328,7 @@ public class AddReplicaCmd implements OverseerCollectionMessageHandler.Cmd {
         }
       }
     }
+    log.info("Returning CreateReplica command.");
     return new CreateReplica(collection, shard, node, replicaType, coreName, coreNodeName);
   }
 
@@ -327,6 +337,7 @@ public class AddReplicaCmd implements OverseerCollectionMessageHandler.Cmd {
                                                             EnumMap<Replica.Type, Integer> replicaTypeVsCount,
                                                             AtomicReference< PolicyHelper.SessionWrapper> sessionWrapper) throws IOException, InterruptedException {
     boolean skipCreateReplicaInClusterState = message.getBool(SKIP_CREATE_REPLICA_IN_CLUSTER_STATE, false);
+    boolean skipNodeAssignment = message.getBool(SKIP_NODE_ASSIGNMENT, false);
     String sliceName = message.getStr(SHARD_ID_PROP);
     DocCollection collection = clusterState.getCollection(collectionName);
 
@@ -345,33 +356,11 @@ public class AddReplicaCmd implements OverseerCollectionMessageHandler.Cmd {
     }
 
     List<ReplicaPosition> positions = null;
-    if (!skipCreateReplicaInClusterState) {
-      if (CloudUtil.usePolicyFramework(collection, cloudManager)) {
-        if (node == null) {
-          if (collection.getPolicyName() != null) message.getProperties().put(Policy.POLICY, collection.getPolicyName());
-          positions = Assign.identifyNodes(cloudManager,
-              clusterState,
-              Assign.getLiveOrLiveAndCreateNodeSetList(clusterState.getLiveNodes(), message, OverseerCollectionMessageHandler.RANDOM),
-              collection.getName(),
-              message,
-              Collections.singletonList(sliceName),
-              numNrtReplicas,
-              numTlogReplicas,
-              numPullReplicas);
-          sessionWrapper.set(PolicyHelper.getLastSessionWrapper(true));
-        }
-      } else {
-        List<Assign.ReplicaCount> sortedNodeList = Assign.getNodesForNewReplicas(clusterState, collection.getName(), sliceName, numNrtReplicas,
-            numTlogReplicas, numPullReplicas, createNodeSetStr, cloudManager);
-        int i = 0;
-        positions = new ArrayList<>();
-        for (Map.Entry<Replica.Type, Integer> e : replicaTypeVsCount.entrySet()) {
-          for (int j = 0; j < e.getValue(); j++) {
-            positions.add(new ReplicaPosition(sliceName, j + 1, e.getKey(), sortedNodeList.get(i % sortedNodeList.size()).nodeName));
-            i++;
-          }
-        }
-      }
+    if (!skipCreateReplicaInClusterState && !skipNodeAssignment) {
+
+      positions = Assign.getNodesForNewReplicas(clusterState, collection.getName(), sliceName, numNrtReplicas,
+                    numTlogReplicas, numPullReplicas, createNodeSetStr, cloudManager);
+      sessionWrapper.set(PolicyHelper.getLastSessionWrapper(true));
     }
 
     if (positions == null)  {

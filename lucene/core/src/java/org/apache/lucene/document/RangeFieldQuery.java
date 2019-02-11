@@ -255,9 +255,9 @@ abstract class RangeFieldQuery extends Query {
 
   /** Check indexed field info against the provided query data. */
   private void checkFieldInfo(FieldInfo fieldInfo) {
-    if (fieldInfo.getPointDimensionCount()/2 != numDims) {
+    if (fieldInfo.getPointDataDimensionCount()/2 != numDims) {
       throw new IllegalArgumentException("field=\"" + field + "\" was indexed with numDims="
-          + fieldInfo.getPointDimensionCount()/2 + " but this query has numDims=" + numDims);
+          + fieldInfo.getPointDataDimensionCount()/2 + " but this query has numDims=" + numDims);
     }
   }
 
@@ -314,7 +314,7 @@ abstract class RangeFieldQuery extends Query {
           return new ScorerSupplier() {
             @Override
             public Scorer get(long leadCost) {
-              return new ConstantScoreScorer(weight, score(), DocIdSetIterator.all(reader.maxDoc()));
+              return new ConstantScoreScorer(weight, score(), scoreMode, DocIdSetIterator.all(reader.maxDoc()));
             }
 
             @Override
@@ -333,7 +333,7 @@ abstract class RangeFieldQuery extends Query {
             public Scorer get(long leadCost) throws IOException {
               values.intersect(visitor);
               DocIdSetIterator iterator = result.build().iterator();
-              return new ConstantScoreScorer(weight, score(), iterator);
+              return new ConstantScoreScorer(weight, score(), scoreMode, iterator);
             }
 
             @Override

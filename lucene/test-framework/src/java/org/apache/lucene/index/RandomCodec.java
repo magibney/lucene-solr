@@ -106,17 +106,16 @@ public class RandomCodec extends AssertingCodec {
           public void writeField(FieldInfo fieldInfo, PointsReader reader) throws IOException {
 
             PointValues values = reader.getValues(fieldInfo.name);
-            boolean singleValuePerDoc = values.size() == values.getDocCount();
 
             try (BKDWriter writer = new RandomlySplittingBKDWriter(writeState.segmentInfo.maxDoc(),
                                                                    writeState.directory,
                                                                    writeState.segmentInfo.name,
-                                                                   fieldInfo.getPointDimensionCount(),
+                                                                   fieldInfo.getPointDataDimensionCount(),
+                                                                   fieldInfo.getPointIndexDimensionCount(),
                                                                    fieldInfo.getPointNumBytes(),
                                                                    maxPointsInLeafNode,
                                                                    maxMBSortInHeap,
                                                                    values.size(),
-                                                                   singleValuePerDoc,
                                                                    bkdSplitRandomSeed ^ fieldInfo.name.hashCode())) {
                 values.intersect(new IntersectVisitor() {
                     @Override
@@ -259,14 +258,10 @@ public class RandomCodec extends AssertingCodec {
 
     final Random random;
 
-    public RandomlySplittingBKDWriter(int maxDoc, Directory tempDir, String tempFileNamePrefix, int numDims,
+    public RandomlySplittingBKDWriter(int maxDoc, Directory tempDir, String tempFileNamePrefix, int numDataDims, int numIndexDims,
                                       int bytesPerDim, int maxPointsInLeafNode, double maxMBSortInHeap,
-                                      long totalPointCount, boolean singleValuePerDoc, int randomSeed) throws IOException {
-      super(maxDoc, tempDir, tempFileNamePrefix, numDims, bytesPerDim, maxPointsInLeafNode, maxMBSortInHeap, totalPointCount,
-            getRandomSingleValuePerDoc(singleValuePerDoc, randomSeed),
-            getRandomLongOrds(totalPointCount, singleValuePerDoc, randomSeed),
-            getRandomOfflineSorterBufferMB(randomSeed),
-            getRandomOfflineSorterMaxTempFiles(randomSeed));
+                                      long totalPointCount, int randomSeed) throws IOException {
+      super(maxDoc, tempDir, tempFileNamePrefix, numDataDims, numIndexDims, bytesPerDim, maxPointsInLeafNode, maxMBSortInHeap, totalPointCount);
       this.random = new Random(randomSeed);
     }
 
@@ -291,7 +286,7 @@ public class RandomCodec extends AssertingCodec {
     @Override
     protected int split(byte[] minPackedValue, byte[] maxPackedValue, int[] parentDims) {
       // BKD normally defaults by the widest dimension, to try to make as squarish cells as possible, but we just pick a random one ;)
-      return random.nextInt(numDims);
+      return random.nextInt(numIndexDims);
     }
   }
 }

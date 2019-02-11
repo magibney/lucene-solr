@@ -698,7 +698,7 @@ Use the `zk downconfig` command to download a configuration set from ZooKeeper t
 All parameters listed below are required.
 
 `-n <name>`::
-Name of config set in ZooKeeper to download. The Admin UI Cloud \-> Tree \-> configs node lists all available configuration sets.
+Name of the configset in ZooKeeper to download. The Admin UI Cloud \-> Tree \-> configs node lists all available configuration sets.
 +
 *Example*: `-n myconfig`
 
@@ -770,7 +770,7 @@ Copy a single file from ZooKeeper to local.
 
 === Remove a znode from ZooKeeper
 
-Use the `zk rm` command to remove a znode (and optionally all child nodes) from ZooKeeper
+Use the `zk rm` command to remove a znode (and optionally all child nodes) from ZooKeeper.
 
 ==== ZK Remove Parameters
 
@@ -806,7 +806,7 @@ Examples of this command with the parameters are:
 
 === Move One ZooKeeper znode to Another (Rename)
 
-Use the `zk mv` command to move (rename) a ZooKeeper znode
+Use the `zk mv` command to move (rename) a ZooKeeper znode.
 
 ==== ZK Move Parameters
 

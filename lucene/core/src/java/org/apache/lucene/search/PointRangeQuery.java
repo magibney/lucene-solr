@@ -234,8 +234,8 @@ public abstract class PointRangeQuery extends Query {
           return null;
         }
 
-        if (values.getNumDimensions() != numDims) {
-          throw new IllegalArgumentException("field=\"" + field + "\" was indexed with numDims=" + values.getNumDimensions() + " but this query has numDims=" + numDims);
+        if (values.getNumIndexDimensions() != numDims) {
+          throw new IllegalArgumentException("field=\"" + field + "\" was indexed with numIndexDimensions=" + values.getNumIndexDimensions() + " but this query has numDims=" + numDims);
         }
         if (bytesPerDim != values.getBytesPerDimension()) {
           throw new IllegalArgumentException("field=\"" + field + "\" was indexed with bytesPerDim=" + values.getBytesPerDimension() + " but this query has bytesPerDim=" + bytesPerDim);
@@ -264,8 +264,7 @@ public abstract class PointRangeQuery extends Query {
           return new ScorerSupplier() {
             @Override
             public Scorer get(long leadCost) {
-              return new ConstantScoreScorer(weight, score(),
-                  DocIdSetIterator.all(reader.maxDoc()));
+              return new ConstantScoreScorer(weight, score(), scoreMode, DocIdSetIterator.all(reader.maxDoc()));
             }
             
             @Override
@@ -293,12 +292,12 @@ public abstract class PointRangeQuery extends Query {
                 int[] cost = new int[] { reader.maxDoc() };
                 values.intersect(getInverseIntersectVisitor(result, cost));
                 final DocIdSetIterator iterator = new BitSetIterator(result, cost[0]);
-                return new ConstantScoreScorer(weight, score(), iterator);
+                return new ConstantScoreScorer(weight, score(), scoreMode, iterator);
               }
 
               values.intersect(visitor);
               DocIdSetIterator iterator = result.build().iterator();
-              return new ConstantScoreScorer(weight, score(), iterator);
+              return new ConstantScoreScorer(weight, score(), scoreMode, iterator);
             }
             
             @Override
