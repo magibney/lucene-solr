@@ -60,7 +60,7 @@ public class PKIAuthenticationPlugin extends AuthenticationPlugin implements Htt
   private final Map<String, PublicKey> keyCache = new ConcurrentHashMap<>();
   private final PublicKeyHandler publicKeyHandler;
   private final CoreContainer cores;
-  private final int MAX_VALIDITY = Integer.parseInt(System.getProperty("pkiauth.ttl", "10000"));
+  private final int MAX_VALIDITY = Integer.parseInt(System.getProperty("pkiauth.ttl", "15000"));
   private final String myNodeName;
   private final HttpHeaderClientInterceptor interceptor = new HttpHeaderClientInterceptor();
   private boolean interceptorRegistered = false;
@@ -248,7 +248,7 @@ public class PKIAuthenticationPlugin extends AuthenticationPlugin implements Htt
     SolrRequestInfo reqInfo = getRequestInfo();
     String usr;
     if (reqInfo != null) {
-      Principal principal = reqInfo.getReq().getUserPrincipal();
+      Principal principal = reqInfo.getUserPrincipal();
       if (principal == null) {
         //this had a request but not authenticated
         //so we don't not need to set a principal

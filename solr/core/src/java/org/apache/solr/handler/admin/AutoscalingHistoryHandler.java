@@ -18,11 +18,14 @@ package org.apache.solr.handler.admin;
 
 import java.lang.invoke.MethodHandles;
 import java.util.Collections;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
+import org.apache.solr.api.Api;
+import org.apache.solr.api.ApiBag;
 import org.apache.solr.client.solrj.impl.CloudSolrClient;
 import org.apache.solr.client.solrj.response.QueryResponse;
 import org.apache.solr.cloud.autoscaling.SystemLogListener;
@@ -122,7 +125,7 @@ public class AutoscalingHistoryHandler extends RequestHandlerBase implements Per
         }
       }
     }
-    try (CloudSolrClient cloudSolrClient = new CloudSolrClient.Builder(Collections.singletonList(coreContainer.getZkController().getZkServerAddress()), Optional.empty())
+    try (CloudSolrClient cloudSolrClient = new CloudSolrClient.Builder(Collections.singletonList(coreContainer.getZkController().getZkServerAddress()), Optional.empty()).withSocketTimeout(30000).withConnectionTimeout(15000)
         .withHttpClient(coreContainer.getUpdateShardHandler().getDefaultHttpClient())
         .build()) {
       QueryResponse qr = cloudSolrClient.query(collection, params);
@@ -147,6 +150,16 @@ public class AutoscalingHistoryHandler extends RequestHandlerBase implements Per
   @Override
   public Category getCategory() {
     return Category.ADMIN;
+  }
+
+  @Override
+  public Boolean registerV2() {
+    return Boolean.TRUE;
+  }
+
+  @Override
+  public Collection<Api> getApis() {
+    return ApiBag.wrapRequestHandlers(this, "autoscaling.history");
   }
 
 }

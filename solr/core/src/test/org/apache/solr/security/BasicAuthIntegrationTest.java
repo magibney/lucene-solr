@@ -16,6 +16,9 @@
  */
 package org.apache.solr.security;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Collections.singletonMap;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -28,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
 import org.apache.http.HttpResponse;
@@ -38,6 +42,7 @@ import org.apache.http.entity.ByteArrayEntity;
 import org.apache.http.message.AbstractHttpMessage;
 import org.apache.http.message.BasicHeader;
 import org.apache.http.util.EntityUtils;
+import org.apache.solr.client.solrj.SolrClient;
 import org.apache.solr.client.solrj.SolrRequest;
 import org.apache.solr.client.solrj.embedded.JettySolrRunner;
 import org.apache.solr.client.solrj.impl.HttpClientUtil;
@@ -59,13 +64,11 @@ import org.apache.solr.common.util.NamedList;
 import org.apache.solr.common.util.StrUtils;
 import org.apache.solr.common.util.Utils;
 import org.apache.solr.util.SolrCLI;
-import org.junit.BeforeClass;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Collections.singletonMap;
 
 public class BasicAuthIntegrationTest extends SolrCloudTestCase {
 
@@ -73,17 +76,25 @@ public class BasicAuthIntegrationTest extends SolrCloudTestCase {
 
   private static final String COLLECTION = "authCollection";
 
-  @BeforeClass
-  public static void setupCluster() throws Exception {
+  @Before
+  public void setupCluster() throws Exception {
     configureCluster(3)
         .addConfig("conf", configset("cloud-minimal"))
         .configure();
 
     CollectionAdminRequest.createCollection(COLLECTION, "conf", 3, 1).process(cluster.getSolrClient());
+    
+    cluster.waitForActiveCollection(COLLECTION, 3, 3);
+  }
+  
+  @After
+  public void tearDownCluster() throws Exception {
+    shutdownCluster();
   }
 
   @Test
   //commented 9-Aug-2018 @BadApple(bugUrl="https://issues.apache.org/jira/browse/SOLR-12028") // 21-May-2018
+  @BadApple(bugUrl="https://issues.apache.org/jira/browse/SOLR-12028") // annotated on: 24-Dec-2018
   public void testBasicAuth() throws Exception {
     boolean isUseV2Api = random().nextBoolean();
     String authcPrefix = "/admin/authentication";
@@ -105,7 +116,15 @@ public class BasicAuthIntegrationTest extends SolrCloudTestCase {
       verifySecurityStatus(cl, baseUrl + authcPrefix, "authentication/class", "solr.BasicAuthPlugin", 20);
 
       randomJetty.stop();
-      randomJetty.start(false);
+      
+      cluster.waitForJettyToStop(randomJetty);
+      
+      randomJetty.start();
+      
+      cluster.waitForAllNodes(30);
+      
+      cluster.waitForActiveCollection(COLLECTION, 3, 3);
+      
       baseUrl = randomJetty.getBaseUrl().toString();
       verifySecurityStatus(cl, baseUrl + authcPrefix, "authentication/class", "solr.BasicAuthPlugin", 20);
 
@@ -121,7 +140,10 @@ public class BasicAuthIntegrationTest extends SolrCloudTestCase {
         ((GenericSolrRequest)genericReq).setContentWriter(new StringPayloadContentWriter(command, CommonParams.JSON_MIME));
       }
 
-
+      // avoid bad connection races due to shutdown
+      cluster.getSolrClient().getHttpClient().getConnectionManager().closeExpiredConnections();
+      cluster.getSolrClient().getHttpClient().getConnectionManager().closeIdleConnections(1, TimeUnit.MILLISECONDS);
+      
       HttpSolrClient.RemoteSolrException exp = expectThrows(HttpSolrClient.RemoteSolrException.class, () -> {
         cluster.getSolrClient().request(genericReq);
       });
@@ -150,6 +172,8 @@ public class BasicAuthIntegrationTest extends SolrCloudTestCase {
 
       executeCommand(baseUrl + authzPrefix, cl,command, "solr", "SolrRocks");
 
+      Thread.sleep(2000); // sad little wait to try and avoid other clients from hitting http noresponse after jetty restart
+      
       baseUrl = cluster.getRandomJetty(random()).getBaseUrl().toString();
       verifySecurityStatus(cl, baseUrl + authzPrefix, "authorization/user-role/harry", NOT_NULL_PREDICATE, 20);
 
@@ -201,6 +225,25 @@ public class BasicAuthIntegrationTest extends SolrCloudTestCase {
       update.add(doc);
       update.setCommitWithin(100);
       cluster.getSolrClient().request(update, COLLECTION);
+
+      //Test for SOLR-12514. Create a new jetty . This jetty does not have the collection.
+      //Make a request to that jetty and it should fail
+      JettySolrRunner aNewJetty = cluster.startJettySolrRunner();
+      SolrClient aNewClient = aNewJetty.newClient();
+      UpdateRequest delQuery = null;
+      delQuery = new UpdateRequest().deleteByQuery("*:*");
+      delQuery.setBasicAuthCredentials("harry","HarryIsUberCool");
+      delQuery.process(aNewClient, COLLECTION);//this should succeed
+      try {
+        delQuery = new UpdateRequest().deleteByQuery("*:*");
+        delQuery.process(aNewClient, COLLECTION);
+        fail("This should not have succeeded without credentials");
+      } catch (HttpSolrClient.RemoteSolrException e) {
+        assertTrue(e.getMessage().contains("Unauthorized request"));
+      } finally {
+        aNewClient.close();
+        cluster.stopJettySolrRunner(aNewJetty);
+      }
 
 
       executeCommand(baseUrl + authcPrefix, cl, "{set-property : { blockUnknown: true}}", "harry", "HarryIsUberCool");

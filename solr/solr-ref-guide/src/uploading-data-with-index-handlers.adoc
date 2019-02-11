@@ -212,7 +212,7 @@ The status field will be non-zero in case of failure.
 
 === Using XSLT to Transform XML Index Updates
 
-The UpdateRequestHandler allows you to index any arbitrary XML using the `<tr>` parameter to apply an https://en.wikipedia.org/wiki/XSLT[XSL transformation]. You must have an XSLT stylesheet in the `conf/xslt` directory of your <<config-sets.adoc#config-sets,config set>> that can transform the incoming data to the expected `<add><doc/></add>` format, and use the `tr` parameter to specify the name of that stylesheet.
+The UpdateRequestHandler allows you to index any arbitrary XML using the `<tr>` parameter to apply an https://en.wikipedia.org/wiki/XSLT[XSL transformation]. You must have an XSLT stylesheet in the `conf/xslt` directory of your <<config-sets.adoc#config-sets,configset>> that can transform the incoming data to the expected `<add><doc/></add>` format, and use the `tr` parameter to specify the name of that stylesheet.
 
 Here is an example XSLT stylesheet:
 
@@ -568,7 +568,7 @@ Nested documents may be indexed via either the XML or JSON data syntax, and is a
  ** it may be infeasible to use `required`
  ** even child documents need a unique `id`
  * You must include a field that identifies the parent document as a parent; it can be any field that suits this purpose, and it will be used as input for the <<other-parsers.adoc#block-join-query-parsers,block join query parsers>>.
- * If you associate a child document as a field (e.g. comment), that field need not be defined in the schema, and probably
+ * If you associate a child document as a field (e.g., comment), that field need not be defined in the schema, and probably
    shouldn't be as it would be confusing.  There is no child document field type.
 
 === XML Examples
@@ -640,4 +640,3 @@ For the anonymous relationship, note the special `\_childDocuments_` key whose c
   }
 ]
 ----
-

@@ -338,7 +338,11 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
     "7.4.0-cfs",
     "7.4.0-nocfs",
     "7.5.0-cfs",
-    "7.5.0-nocfs"
+    "7.5.0-nocfs",
+    "7.6.0-cfs",
+    "7.6.0-nocfs",
+    "7.7.0-cfs",
+    "7.7.0-nocfs"
   };
 
   public static String[] getOldNames() {
@@ -368,7 +372,9 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
     "sorted.7.3.0",
     "sorted.7.3.1",
     "sorted.7.4.0",
-    "sorted.7.5.0"
+    "sorted.7.5.0",
+    "sorted.7.6.0",
+    "sorted.7.7.0"
   };
 
   public static String[] getOldSortedNames() {
@@ -1064,7 +1070,7 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
 
     // make sure writer sees right total -- writer seems not to know about deletes in .del?
     final int expected = 45;
-    assertEquals("wrong doc count", expected, writer.numDocs());
+    assertEquals("wrong doc count", expected, writer.getDocStats().numDocs);
     writer.close();
 
     // make sure searching sees right # hits
@@ -1132,7 +1138,7 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
     for(int i=0;i<35;i++) {
       addDoc(writer, i);
     }
-    assertEquals("wrong doc count", 35, writer.maxDoc());
+    assertEquals("wrong doc count", 35, writer.getDocStats().maxDoc);
     if (fullyMerged) {
       writer.forceMerge(1);
     }
@@ -1583,7 +1589,78 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
     writer.close();
     dir.close();
   }
-  
+
+  public void testSoftDeletes() throws Exception {
+    Path oldIndexDir = createTempDir("dvupdates");
+    TestUtil.unzip(getDataInputStream(dvUpdatesIndex), oldIndexDir);
+    Directory dir = newFSDirectory(oldIndexDir);
+    verifyUsesDefaultCodec(dir, dvUpdatesIndex);
+    IndexWriterConfig conf = new IndexWriterConfig(new MockAnalyzer(random())).setSoftDeletesField("__soft_delete");
+    IndexWriter writer = new IndexWriter(dir, conf);
+    int maxDoc = writer.getDocStats().maxDoc;
+    writer.updateDocValues(new Term("id", "1"),new NumericDocValuesField("__soft_delete", 1));
+
+    if (random().nextBoolean()) {
+      writer.commit();
+    }
+    writer.forceMerge(1);
+    writer.commit();
+    assertEquals(maxDoc-1, writer.getDocStats().maxDoc);
+    writer.close();
+    dir.close();
+  }
+
+  public void testDocValuesUpdatesWithNewField() throws Exception {
+    Path oldIndexDir = createTempDir("dvupdates");
+    TestUtil.unzip(getDataInputStream(dvUpdatesIndex), oldIndexDir);
+    Directory dir = newFSDirectory(oldIndexDir);
+    verifyUsesDefaultCodec(dir, dvUpdatesIndex);
+
+    // update fields and verify index
+    IndexWriterConfig conf = new IndexWriterConfig(new MockAnalyzer(random()));
+    IndexWriter writer = new IndexWriter(dir, conf);
+    // introduce a new field that we later update
+    writer.addDocument(Arrays.asList(new StringField("id", "" + Integer.MAX_VALUE, Field.Store.NO),
+        new NumericDocValuesField("new_numeric", 1),
+        new BinaryDocValuesField("new_binary", toBytes(1))));
+    writer.updateNumericDocValue(new Term("id", "1"), "new_numeric", 1);
+    writer.updateBinaryDocValue(new Term("id", "1"), "new_binary", toBytes(1));
+
+    writer.commit();
+    Runnable assertDV = () -> {
+      boolean found = false;
+      try (DirectoryReader reader = DirectoryReader.open(dir)) {
+        for (LeafReaderContext ctx : reader.leaves()) {
+          LeafReader leafReader = ctx.reader();
+          TermsEnum id = leafReader.terms("id").iterator();
+          if (id.seekExact(new BytesRef("1"))) {
+            PostingsEnum postings = id.postings(null, PostingsEnum.NONE);
+            NumericDocValues numericDocValues = leafReader.getNumericDocValues("new_numeric");
+            BinaryDocValues binaryDocValues = leafReader.getBinaryDocValues("new_binary");
+            int doc;
+            while ((doc = postings.nextDoc()) != DocIdSetIterator.NO_MORE_DOCS) {
+              found = true;
+              assertTrue(binaryDocValues.advanceExact(doc));
+              assertTrue(numericDocValues.advanceExact(doc));
+              assertEquals(1, numericDocValues.longValue());
+              assertEquals(toBytes(1), binaryDocValues.binaryValue());
+            }
+          }
+        }
+      } catch (IOException e) {
+        throw new AssertionError(e);
+      }
+      assertTrue(found);
+    };
+    assertDV.run();
+    // merge all segments
+    writer.forceMerge(1);
+    writer.commit();
+    assertDV.run();
+    writer.close();
+    dir.close();
+  }
+
   // LUCENE-5907
   public void testUpgradeWithNRTReader() throws Exception {
     for (String name : oldNames) {
@@ -1640,6 +1717,33 @@ public class TestBackwardsCompatibility extends LuceneTestCase {
       TestUtil.checkIndex(dir);
       dir.close();
     }
+  }
+
+  /**
+   * Tests that {@link CheckIndex} can detect invalid sort on sorted indices created
+   * before https://issues.apache.org/jira/browse/LUCENE-8592.
+   */
+  public void testSortedIndexWithInvalidSort() throws Exception {
+    Path path = createTempDir("sorted");
+    String name = "sorted-invalid.7.5.0.zip";
+    InputStream resource = TestBackwardsCompatibility.class.getResourceAsStream(name);
+    assertNotNull("Sorted index index " + name + " not found", resource);
+    TestUtil.unzip(resource, path);
+
+    Directory dir = FSDirectory.open(path);
+
+    DirectoryReader reader = DirectoryReader.open(dir);
+    assertEquals(1, reader.leaves().size());
+    Sort sort = reader.leaves().get(0).reader().getMetaData().getSort();
+    assertNotNull(sort);
+    assertEquals("<long: \"dateDV\">! missingValue=-9223372036854775808", sort.toString());
+    reader.close();
+    CheckIndex.Status status = TestUtil.checkIndex(dir);
+    assertEquals(1, status.segmentInfos.size());
+    assertNotNull(status.segmentInfos.get(0).indexSortStatus.error);
+    assertEquals(status.segmentInfos.get(0).indexSortStatus.error.getMessage(),
+        "segment has indexSort=<long: \"dateDV\">! missingValue=-9223372036854775808 but docID=4 sorts after docID=5");
+    dir.close();
   }
   
   static long getValue(BinaryDocValues bdv) throws IOException {

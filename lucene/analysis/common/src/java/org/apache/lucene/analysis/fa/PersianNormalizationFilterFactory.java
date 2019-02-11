@@ -19,7 +19,6 @@ package org.apache.lucene.analysis.fa;
 
 import java.util.Map;
 
-import org.apache.lucene.analysis.fa.PersianNormalizationFilter;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.util.AbstractAnalysisFactory;
 import org.apache.lucene.analysis.util.MultiTermAwareComponent;
@@ -35,6 +34,8 @@ import org.apache.lucene.analysis.util.TokenFilterFactory;
  *     &lt;filter class="solr.PersianNormalizationFilterFactory"/&gt;
  *   &lt;/analyzer&gt;
  * &lt;/fieldType&gt;</pre>
+ *
+ * @since 3.1
  */
 public class PersianNormalizationFilterFactory extends TokenFilterFactory implements MultiTermAwareComponent {
   

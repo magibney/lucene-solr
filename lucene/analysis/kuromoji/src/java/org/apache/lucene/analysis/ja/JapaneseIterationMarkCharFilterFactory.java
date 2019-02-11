@@ -18,7 +18,6 @@ package org.apache.lucene.analysis.ja;
 
 
 import org.apache.lucene.analysis.CharFilter;
-import org.apache.lucene.analysis.ja.JapaneseIterationMarkCharFilter;
 import org.apache.lucene.analysis.util.AbstractAnalysisFactory;
 import org.apache.lucene.analysis.util.CharFilterFactory;
 import org.apache.lucene.analysis.util.MultiTermAwareComponent;
@@ -35,6 +34,8 @@ import java.util.Map;
  *     &lt;tokenizer class="solr.JapaneseTokenizerFactory"/&gt;
  *   &lt;/analyzer&gt;
  * &lt;/fieldType&gt;</pre>
+ *
+ * @since 4.0.0
  */
 public class JapaneseIterationMarkCharFilterFactory extends CharFilterFactory implements MultiTermAwareComponent {
 

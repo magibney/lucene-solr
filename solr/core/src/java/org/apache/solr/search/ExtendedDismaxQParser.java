@@ -46,6 +46,7 @@ import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.MultiPhraseQuery;
 import org.apache.lucene.search.PhraseQuery;
 import org.apache.lucene.search.Query;
+import org.apache.lucene.search.spans.SpanQuery;
 import org.apache.lucene.util.Version;
 import org.apache.solr.analysis.TokenizerChain;
 import org.apache.solr.common.params.DisMaxParams;
@@ -63,7 +64,6 @@ import java.io.IOException;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.util.ResourceLoader;
 import org.apache.lucene.search.spans.SpanNearQuery;
-import org.apache.lucene.search.spans.SpanQuery;
 
 /**
  * Query parser that generates DisjunctionMaxQueries based on user configuration.
@@ -1397,10 +1397,11 @@ public class ExtendedDismaxQParser extends QParser {
             // Boolean query on a whitespace-separated string
             // If these were synonyms we would have a SynonymQuery
             if (query instanceof BooleanQuery) {
-              BooleanQuery bq = (BooleanQuery) query;
-              query = SolrPluginUtils.setMinShouldMatch(bq, minShouldMatch, false);
-            }
-            if (query instanceof PhraseQuery) {
+              if (type == QType.FIELD) { // Don't set mm for boolean query containing phrase queries
+                BooleanQuery bq = (BooleanQuery) query;
+                query = SolrPluginUtils.setMinShouldMatch(bq, minShouldMatch, false);
+              }
+            } else if (query instanceof PhraseQuery) {
               PhraseQuery pq = (PhraseQuery)query;
               if (minClauseSize > 1 && pq.getTerms().length < minClauseSize) return null;
               PhraseQuery.Builder builder = new PhraseQuery.Builder();
@@ -1426,6 +1427,8 @@ public class ExtendedDismaxQParser extends QParser {
               if (slop != snq.getSlop()) {
                 query = new SpanNearQuery.Builder(snq).setSlop(slop).build();
               }
+            } else if (query instanceof SpanQuery) {
+              return query;
             } else if (minClauseSize > 1) {
               // if it's not a type of phrase query, it doesn't meet the minClauseSize requirements
               return null;

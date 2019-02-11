@@ -291,5 +291,15 @@ public class TestUnifiedSolrHighlighter extends SolrTestCaseJ4 {
     assertQ(req("q", "id:101", "hl", "true", "hl.q", "text:document", "hl.fl", "text3", "hl.requireFieldMatch", "true"),
         "count(//lst[@name='highlighting']/lst[@name='101']/arr[@name='text3']/*)=0");
   }
-  
+
+  public void testWeightMatchesEnabled() {
+    clearIndex();
+    assertU(adoc("text", "alpha bravo charlie", "id", "101"));
+    assertU(commit());
+    assertQ("weight matches enabled, phrase highlights separately",
+        req("q", "text:\"alpha bravo\"", "hl", "true", "hl.weightMatches", "true"),
+        "count(//lst[@name='highlighting']/lst[@name='101']/arr[@name='text']/*)=1",
+        "//lst[@name='highlighting']/lst[@name='101']/arr/str[1]='<em>alpha bravo</em> charlie'");
+  }
+
 }

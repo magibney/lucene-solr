@@ -22,7 +22,8 @@
 
 The `cartesianProduct` function turns a single tuple with a multi-valued field (i.e., an array) into multiple tuples, one for each value in the array field. That is, given a single tuple containing an array of N values for fieldA, the `cartesianProduct` function will output N tuples, each with one value from the original tuple's array. In essence, you can flatten arrays for further processing.
 
-For example, using `cartesianProduct` you can turn this tuple
+For example, using `cartesianProduct` you can turn this tuple:
+
 [source,text]
 ----
 {
@@ -31,7 +32,8 @@ For example, using `cartesianProduct` you can turn this tuple
 }
 ----
 
-into the following 3 tuples
+into the following 3 tuples:
+
 [source,text]
 ----
 {
@@ -67,7 +69,7 @@ cartesianProduct(
 
 === cartesianProduct Examples
 
-The following examples show different outputs for this source tuple
+The following examples show different outputs for this source tuple:
 
 [source,text]
 ----
@@ -612,7 +614,7 @@ eval(expr)
 ----
 
 In the example above the `eval` expression reads the first tuple from the underlying expression. It then compiles and
-executes the string Streaming Expression in the epxr_s field.
+executes the string Streaming Expression in the expr_s field.
 
 == executor
 
@@ -840,6 +842,29 @@ intersect(
 )
 ----
 
+[#list_expression]
+== list
+
+The `list` function wraps N Stream Expressions and opens and iterates each stream sequentially.
+This has the effect of concatenating the results of multiple Streaming Expressions.
+
+=== list Parameters
+
+* StreamExpressions ...: N Streaming Expressions
+
+=== list Syntax
+
+[source,text]
+----
+list(tuple(a="hello world"), tuple(a="HELLO WORLD"))
+
+list(search(collection1, q="*:*", fl="id, prod_ss", sort="id asc"),
+     search(collection2, q="*:*", fl="id, prod_ss", sort="id asc"))
+
+list(tuple(a=search(collection1, q="*:*", fl="id, prod_ss", sort="id asc")),
+     tuple(a=search(collection2, q="*:*", fl="id, prod_ss", sort="id asc")))
+----
+
 == merge
 
 The `merge` function merges two or more streaming expressions and maintains the ordering of the underlying streams. Because the order is maintained, the sorts of the underlying streams must line up with the on parameter provided to the merge function.
@@ -1028,6 +1053,31 @@ The following is a `solrconfig.xml` snippet for 2 workers and "year_i" as the `p
 ----
 ====
 
+== plist
+
+The `plist` function wraps N Stream Expressions and opens the streams in parallel
+and iterates each stream sequentially. The difference between the `list` and `plist` is that
+the streams are opened in parallel. Since many streams such as
+`facet`, `stats` and `significantTerms` push down heavy operations to Solr when they are opened,
+the plist function can dramatically improve performance by doing these operations in parallel.
+
+=== plist Parameters
+
+* StreamExpressions ...: N Streaming Expressions
+
+=== plist Syntax
+
+[source,text]
+----
+plist(tuple(a="hello world"), tuple(a="HELLO WORLD"))
+
+plist(search(collection1, q="*:*", fl="id, prod_ss", sort="id asc"),
+      search(collection2, q="*:*", fl="id, prod_ss", sort="id asc"))
+
+plist(tuple(a=search(collection1, q="*:*", fl="id, prod_ss", sort="id asc")),
+      tuple(a=search(collection2, q="*:*", fl="id, prod_ss", sort="id asc")))
+----
+
 == priority
 
 The `priority` function is a simple priority scheduler for the <<executor>> function. The `executor` function doesn't directly have a concept of task prioritization; instead it simply executes tasks in the order that they are read from it's underlying stream. The `priority` function provides the ability to schedule a higher priority task ahead of lower priority tasks that were submitted earlier.
@@ -1113,7 +1163,7 @@ rollup(
 )
 ----
 
-The example about shows the rollup function wrapping the search function. Notice that search function is using the `/export` handler to provide the entire result set to the rollup stream. Also notice that the search function's *sort param* matches up with the rollup's `over` parameter. This allows the rollup function to rollup the over the `a_s` field, one group at a time.
+The example about shows the rollup function wrapping the search function. Notice that search function is using the `/export` handler to provide the entire result set to the rollup stream. Also notice that the search function's `sort` parameter matches up with the rollup's `over` parameter. This allows the rollup function to rollup the over the `a_s` field, one group at a time.
 
 == scoreNodes
 
