@@ -39,10 +39,12 @@ public class ExtendedDismaxQParserPlugin extends QParserPlugin {
   public static final String EXPLICIT_PHRASE_AS_GRAPH_QUERY_ARGNAME = "explicitPhraseAsGraphQuery";
   public static final String MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME = "multiphraseAsGraphQuery";
   public static final String EXPLICIT_MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME = "explicitMultiphraseAsGraphQuery";
+  public static final String USE_SPANS_FOR_GRAPH_QUERIES_ARGNAME = "useSpansForGraphQueries";
   public static final boolean DEFAULT_PHRASE_AS_GRAPH_QUERY = false;
   public static final boolean DEFAULT_EXPLICIT_PHRASE_AS_GRAPH_QUERY = false;
   public static final boolean DEFAULT_MULTIPHRASE_AS_GRAPH_QUERY = false;
   public static final boolean DEFAULT_EXPLICIT_MULTIPHRASE_AS_GRAPH_QUERY = false;
+  public static final boolean DEFAULT_USE_SPANS_FOR_GRAPH_QUERIES = false;
   public static final boolean DEFAULT_USE_LEGACY_IMPLEMENTATION = false;
   
   private NamedList graphQueryFilterSpec;
@@ -51,6 +53,7 @@ public class ExtendedDismaxQParserPlugin extends QParserPlugin {
   private boolean explicitPhraseAsGraphQuery;
   private boolean multiphraseAsGraphQuery;
   private boolean explicitMultiphraseAsGraphQuery;
+  private boolean useSpansForGraphQueries;
   
   @Override
   public void init(NamedList args) {
@@ -60,6 +63,7 @@ public class ExtendedDismaxQParserPlugin extends QParserPlugin {
     explicitPhraseAsGraphQuery = (tmp = args.removeBooleanArg(EXPLICIT_PHRASE_AS_GRAPH_QUERY_ARGNAME)) == null ? DEFAULT_EXPLICIT_PHRASE_AS_GRAPH_QUERY : tmp;
     multiphraseAsGraphQuery = (tmp = args.removeBooleanArg(MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME)) == null ? DEFAULT_MULTIPHRASE_AS_GRAPH_QUERY : tmp;
     explicitMultiphraseAsGraphQuery = (tmp = args.removeBooleanArg(EXPLICIT_MULTIPHRASE_AS_GRAPH_QUERY_ARGNAME)) == null ? DEFAULT_EXPLICIT_MULTIPHRASE_AS_GRAPH_QUERY : tmp;
+    useSpansForGraphQueries = (tmp = args.removeBooleanArg(USE_SPANS_FOR_GRAPH_QUERIES_ARGNAME)) == null ? DEFAULT_USE_SPANS_FOR_GRAPH_QUERIES : tmp;
     super.init(args);
   }
 
@@ -108,7 +112,7 @@ public class ExtendedDismaxQParserPlugin extends QParserPlugin {
       graphQueryFilterSpec = null;
       graphQueryFilter = initGraphQueryFilter(tmp, req.getCore().getResourceLoader());
     }
-    return new ExtendedDismaxQParser(qstr, localParams, params, req, graphQueryFilter,
-        phraseAsGraphQuery, explicitPhraseAsGraphQuery, multiphraseAsGraphQuery, explicitMultiphraseAsGraphQuery);
+    return new ExtendedDismaxQParser(qstr, localParams, params, req, graphQueryFilter, phraseAsGraphQuery,
+        explicitPhraseAsGraphQuery, multiphraseAsGraphQuery, explicitMultiphraseAsGraphQuery, useSpansForGraphQueries);
   }
 }

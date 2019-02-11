@@ -115,6 +115,7 @@ public class ExtendedDismaxQParser extends QParser {
   private final boolean explicitPhraseAsGraphQuery;
   private final boolean multiphraseAsGraphQuery;
   private final boolean explicitMultiphraseAsGraphQuery;
+  private final boolean useSpansForGraphQueries;
   private Query parsedUserQuery;
   private Query altUserQuery;
   private List<Query> boostQueries;
@@ -122,12 +123,13 @@ public class ExtendedDismaxQParser extends QParser {
   
   
   public ExtendedDismaxQParser(String qstr, SolrParams localParams, SolrParams params, SolrQueryRequest req) {
-    this(qstr, localParams, params, req, null, false, false, false, false);
+    this(qstr, localParams, params, req, null, false, false, false, false, false);
   }
 
   public ExtendedDismaxQParser(String qstr, SolrParams localParams, SolrParams params, SolrQueryRequest req, GraphQueryFilter graphQueryFilter,
       boolean phraseAsGraphQuery, boolean explicitPhraseAsGraphQuery,
-      boolean multiphraseAsGraphQuery, boolean explicitMultiphraseAsGraphQuery) {
+      boolean multiphraseAsGraphQuery, boolean explicitMultiphraseAsGraphQuery,
+      boolean useSpansForGraphQueries) {
     super(qstr, localParams, params, req);
     config = this.createConfiguration(qstr,localParams,params,req);
     this.graphQueryFilter = graphQueryFilter;
@@ -138,6 +140,7 @@ public class ExtendedDismaxQParser extends QParser {
     this.explicitPhraseAsGraphQuery = explicitPhraseAsGraphQuery;
     this.multiphraseAsGraphQuery = multiphraseAsGraphQuery;
     this.explicitMultiphraseAsGraphQuery = explicitMultiphraseAsGraphQuery;
+    this.useSpansForGraphQueries = useSpansForGraphQueries;
   }
   
   @Override
@@ -286,8 +289,8 @@ public class ExtendedDismaxQParser extends QParser {
    * to parse the query.
    */
   protected ExtendedSolrQueryParser createEdismaxQueryParser(QParser qParser, String field) {
-    return new ExtendedSolrQueryParser(qParser, field, graphQueryFilter, config.solrParams,
-        phraseAsGraphQuery, explicitPhraseAsGraphQuery, multiphraseAsGraphQuery, explicitMultiphraseAsGraphQuery);
+    return new ExtendedSolrQueryParser(qParser, field, graphQueryFilter, config.solrParams, phraseAsGraphQuery,
+        explicitPhraseAsGraphQuery, multiphraseAsGraphQuery, explicitMultiphraseAsGraphQuery, useSpansForGraphQueries);
   }
   
   /**
@@ -951,11 +954,11 @@ public class ExtendedDismaxQParser extends QParser {
     private int slop;
     
     public ExtendedSolrQueryParser(QParser parser, String defaultField) {
-      this(parser, defaultField, null, null, false, false, false, false);
+      this(parser, defaultField, null, null, false, false, false, false, false);
     }
     public ExtendedSolrQueryParser(QParser parser, String defaultField, GraphQueryFilter graphQueryFilter,
         SolrParams params, boolean phraseAsGraphQuery, boolean explicitPhraseAsGraphQuery,
-        boolean multiphraseAsGraphQuery, boolean explicitMultiphraseAsGraphQuery) {
+        boolean multiphraseAsGraphQuery, boolean explicitMultiphraseAsGraphQuery, boolean useSpansForGraphQueries) {
       super(parser, defaultField);
       // Respect the q.op parameter before mm will be applied later
       SolrParams defaultParams = SolrParams.wrapDefaults(parser.getLocalParams(), parser.getParams());
@@ -967,6 +970,7 @@ public class ExtendedDismaxQParser extends QParser {
       this.explicitPhraseAsGraphQuery = explicitPhraseAsGraphQuery;
       this.multiphraseAsGraphQuery = multiphraseAsGraphQuery;
       this.explicitMultiphraseAsGraphQuery = explicitMultiphraseAsGraphQuery;
+      this.useSpansForGraphQueries = useSpansForGraphQueries;
     }
     
     public void setRemoveStopFilter(boolean remove) {
@@ -1367,7 +1371,7 @@ public class ExtendedDismaxQParser extends QParser {
 
     @Override
     protected Query analyzePhrase(String field, TokenStream stream, int slop) throws IOException {
-      if (phraseAsGraphQuery || (explicitPhraseAsGraphQuery && minClauseSize == 0)) {
+      if ((phraseAsGraphQuery || (explicitPhraseAsGraphQuery && minClauseSize == 0)) && (useSpansForGraphQueries || slop == 0)) {
         return analyzeGraphPhrase(stream, field, slop);
       } else {
         return super.analyzePhrase(field, stream, slop);
@@ -1376,7 +1380,7 @@ public class ExtendedDismaxQParser extends QParser {
 
     @Override
     protected Query analyzeMultiPhrase(String field, TokenStream stream, int slop) throws IOException {
-      if (multiphraseAsGraphQuery || (explicitMultiphraseAsGraphQuery && minClauseSize == 0)) {
+      if ((multiphraseAsGraphQuery || (explicitMultiphraseAsGraphQuery && minClauseSize == 0)) && (useSpansForGraphQueries || slop == 0)) {
         return analyzeGraphPhrase(stream, field, slop);
       } else {
         return super.analyzeMultiPhrase(field, stream, slop);
