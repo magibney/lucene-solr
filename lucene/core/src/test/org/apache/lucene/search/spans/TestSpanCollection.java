@@ -62,7 +62,7 @@ import org.apache.lucene.search.ScoreMode;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.Directory;
-import org.apache.lucene.store.RAMDirectory;
+import org.apache.lucene.store.ByteBuffersDirectory;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.QueryBuilder;
 import static org.junit.Assert.assertEquals;
@@ -1580,7 +1580,7 @@ public class TestSpanCollection extends LuceneTestCase {
     String input = "SPECIAL PROJECTS - xxx,SPECIAL PROJECTS -- yyy";
     String field = "field";
     IndexWriterConfig config = new IndexWriterConfig(indexingAnalyzer);
-    try (IndexWriter w = new IndexWriter(new RAMDirectory(), config)) {
+    try (IndexWriter w = new IndexWriter(new ByteBuffersDirectory(), config)) {
       Document doc = new Document();
       doc.add(new TextField(field, input, Field.Store.YES));
       w.addDocument(doc);
@@ -1588,7 +1588,7 @@ public class TestSpanCollection extends LuceneTestCase {
 
       try (DirectoryReader reader = DirectoryReader.open(w, true, true)) {
         IndexSearcher searcher = new IndexSearcher(reader);
-        Query q = new QueryBuilder(searchAnalyzer).createPhraseQuery(field, input);
+        Query q = new QueryBuilder(searchAnalyzer).setUseSpansForGraphQueries(true).createPhraseQuery(field, input);
         System.err.println("QUERY: "+q);
         TopDocs topDocs = searcher.search(q, 10);
         try {
@@ -1624,7 +1624,7 @@ public class TestSpanCollection extends LuceneTestCase {
     String input = "i'm so ill i'll be staying home";
     String field = "field";
     IndexWriterConfig config = new IndexWriterConfig(indexingAnalyzer);
-    try (IndexWriter w = new IndexWriter(new RAMDirectory(), config)) {
+    try (IndexWriter w = new IndexWriter(new ByteBuffersDirectory(), config)) {
       Document doc = new Document();
       doc.add(new TextField(field, input, Field.Store.YES));
       w.addDocument(doc);

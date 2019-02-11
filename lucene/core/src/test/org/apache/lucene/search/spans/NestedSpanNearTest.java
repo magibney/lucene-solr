@@ -36,7 +36,7 @@ import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.Directory;
-import org.apache.lucene.store.RAMDirectory;
+import org.apache.lucene.store.ByteBuffersDirectory;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -49,7 +49,7 @@ public class NestedSpanNearTest {
 
   @Before
   public void setup() throws Exception {
-    directory = new RAMDirectory();
+    directory = new ByteBuffersDirectory();
   }
 
   protected static void addDocument(IndexWriter writer, String field, String value) throws IOException {

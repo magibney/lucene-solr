@@ -258,6 +258,21 @@ public class QueryBuilder {
     return enableGraphQueries;
   }
 
+  /** Enable or disable use of Spans for graph TokenStream processing (disabled by default).
+   *
+   * @lucene.experimental */
+  public QueryBuilder setUseSpansForGraphQueries(boolean v) {
+    useSpansForGraphQueries = v;
+    return this;
+  }
+
+  /** Returns true if use of Spans for graph TokenStream processing is enabled (default false).
+   *
+   * @lucene.experimental */
+  public boolean getUseSpansForGraphQueries() {
+    return useSpansForGraphQueries;
+  }
+
   /**
    * Creates a query from a token stream.
    *
