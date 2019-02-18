@@ -1451,7 +1451,7 @@ public class ExtendedDismaxQParser extends QParser {
 
     @Override
     protected Query analyzePhrase(String field, TokenStream stream, int slop) throws IOException {
-      if (phraseAsGraphQuery || (explicitPhraseAsGraphQuery && minClauseSize == 0)) {
+      if ((phraseAsGraphQuery || (explicitPhraseAsGraphQuery && minClauseSize == 0)) && (useSpansForGraphQueries || slop == 0)) {
         return analyzeGraphPhrase(stream, field, slop);
       } else {
         return super.analyzePhrase(field, stream, slop);
@@ -1460,7 +1460,7 @@ public class ExtendedDismaxQParser extends QParser {
 
     @Override
     protected Query analyzeMultiPhrase(String field, TokenStream stream, int slop) throws IOException {
-      if (multiphraseAsGraphQuery || (explicitMultiphraseAsGraphQuery && minClauseSize == 0)) {
+      if ((multiphraseAsGraphQuery || (explicitMultiphraseAsGraphQuery && minClauseSize == 0)) && (useSpansForGraphQueries || slop == 0)) {
         return analyzeGraphPhrase(stream, field, slop);
       } else {
         return super.analyzeMultiPhrase(field, stream, slop);
