@@ -52,11 +52,17 @@ Upgrade Notes
 New Features
 ----------------------
 
+* SOLR-13171 : A true streaming parser for javabin payload/stream without creating any objects (noble)
 
 Bug Fixes
 ----------------------
 
 * SOLR-12330: 500 error code on json.facet syntax errors (Munendra S N, Mikhail Khludnev)
+
+* SOLR-13229: Cleanup replicasMetTragicEvent after all types of exception (Tomás Fernández Löbbe)
+
+* SOLR-11876: In-place update fails when resolving from Tlog if schema has a required field (Justin Deoliveira, janhoy,
+  Ishan Chattopadhyaya)
 
 Improvements
 ----------------------
@@ -200,6 +206,10 @@ New Features
 
 * SOLR-13147: Add movingMAD Stream Evaluator (Joel Bernstein)
 
+* SOLR-13155: Add command-line option for testing autoscaling configurations. (ab)
+
+* SOLR-13241: Add 'autoscaling' tool support to solr.cmd (Jason Gerlowski)
+
 Bug Fixes
 ----------------------
 
@@ -207,6 +217,9 @@ Bug Fixes
 
 * SOLR-11774: langid.map.individual now works together with langid.map.keepOrig. Also the detectLanguage() API 
   is changed to accept a Reader allowing for more memory efficient implementations (janhoy)
+
+* SOLR-13126: Query boosts were not being combined correctly for documents where not all boost queries
+  matched (Alan Woodward, Mikhail Khludnev)
 
 Improvements
 ----------------------
