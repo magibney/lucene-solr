@@ -60,8 +60,7 @@ interface IndexLookahead extends MatchShrinkAware {
    * If negative, must be one of the special values listed above, indicating that lookahead is
    * not possible. The different variants of special value negative return values are used to distinguish
    * different properties/scope that affect downstream caching options.
-   * @return
-   * @throws IOException
+   * @return minimum possible position that might be returned by a call to nextStartPosition()
    */
   int lookaheadNextStartPositionFloor() throws IOException;
 
@@ -71,7 +70,7 @@ interface IndexLookahead extends MatchShrinkAware {
    * special return values for lookaheadNextStartPositionFloor(). Negative values (aside from the special values)
    * indicate that there is the potential for endPosition to *decrease* between subsequent calls to
    * nextStartPosition() -- a case which requires special handling to reliably support complete combinatoric matching.
-   * @return
+   * @return maximum position length that could possibly be associated with any instance of this term in this document
    */
   int positionLengthCeiling() throws IOException;
 }
