@@ -30,7 +30,7 @@ public class TwoPhaseOnlySpans extends Spans {
 
   /**
    * 
-   * @param backing
+   * @param backing the backing DocIdSetIterator instance
    */
   public TwoPhaseOnlySpans(DocIdSetIterator backing) {
     this.backing = backing;
