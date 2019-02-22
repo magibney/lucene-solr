@@ -133,8 +133,8 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
 
     /**
      * Set shingles required for this query to match at specified slop
-     * @param shingles
-     * @return 
+     * @param shingles set of "shingle" tokens that must match
+     * @return this, for method-call chaining
      */
     public Builder setShingles(String shingleFieldSuffix, Set<BytesRef> shingles) {
       if (!ordered) {
@@ -227,8 +227,8 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
    * @param clausesIn the clauses to find near each other, in the same field, at least 2.
    * @param slop The slop value
    * @param inOrder true if order is important
-   * @param comboMode
-   * @param allowOverlap
+   * @param comboMode combinatoric semantics
+   * @param allowOverlap allow overlapping matches
    */
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode, boolean allowOverlap,
       int combineRepeatGroupsThreshold, boolean supportVariableTermSpansLength, String shingleFieldSuffix, Set<BytesRef> shingles, boolean legacy,
