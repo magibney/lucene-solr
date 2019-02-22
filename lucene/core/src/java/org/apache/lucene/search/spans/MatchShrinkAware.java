@@ -28,14 +28,14 @@ public interface MatchShrinkAware {
    * Returns the minimum position length that could possibly be associated with any instance of
    * this term in this document. This will generally be 1 for TermSpans, n for NearSpansOrdered of n clauses,
    * and min of subSpans.positionLengthFloor() for SpanOrQuery.
-   * @return 
+   * @return minimum position length that could possibly be associated with any instance of this term in this document
    */
   int positionLengthFloor() throws IOException;
 
   /**
    * Returns the max amount by which endPosition may decrease on subsequent invocations of nextStartPosition().
    * return value may be specific to the current state/position of the Spans.
-   * @return 
+   * @return max amount by which endPosition may decrease on subsequent invocations of nextStartPosition()
    */
   int endPositionDecreaseCeiling() throws IOException;
 }
