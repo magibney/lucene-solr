@@ -1154,12 +1154,6 @@ public class PositionDeque implements Iterable<Spans> {
   
   /**
    * Public entrypoint for building a "lattice" of Spans-transverse phrase links for a given startPosition.
-   * 
-   * @param minStart
-   * @param remainingSlopToCaller
-   * @param comboMode
-   * @return
-   * @throws IOException 
    */
   public DLLReturnNode buildLattice(int minStart, int remainingSlopToCaller, ComboMode comboMode, boolean loop) throws IOException {
     final DLLReturnNode anchor = returned.anchor;
