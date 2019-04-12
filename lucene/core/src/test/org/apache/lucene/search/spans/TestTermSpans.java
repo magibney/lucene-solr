@@ -258,11 +258,11 @@ public class TestTermSpans extends LuceneTestCase {
     assertEquals(1, posIncrAtt.getPositionIncrement());
     assertEquals(1, posLenAtt.getPositionLength());
     assertTrue(tf.incrementToken());
-    assertEquals("perlmans", charTermAtt.toString());
+    assertEquals("perlman's", charTermAtt.toString());
     assertEquals(0, posIncrAtt.getPositionIncrement());
     assertEquals(2, posLenAtt.getPositionLength());
     assertTrue(tf.incrementToken());
-    assertEquals("perlman's", charTermAtt.toString());
+    assertEquals("perlmans", charTermAtt.toString());
     assertEquals(0, posIncrAtt.getPositionIncrement());
     assertEquals(2, posLenAtt.getPositionLength());
     assertTrue(tf.incrementToken());
