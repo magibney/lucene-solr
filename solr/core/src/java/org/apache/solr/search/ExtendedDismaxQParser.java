@@ -63,6 +63,10 @@ import org.apache.solr.util.SolrPluginUtils;
 
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Multimaps;
+import java.io.IOException;
+import org.apache.lucene.analysis.TokenStream;
+import org.apache.lucene.analysis.util.ResourceLoader;
+import org.apache.lucene.search.spans.SpanNearQuery;
 
 /**
  * Query parser that generates DisjunctionMaxQueries based on user configuration.
@@ -108,6 +112,12 @@ public class ExtendedDismaxQParser extends QParser {
   }
   
   private ExtendedDismaxConfiguration config;
+  private final GraphQueryFilter graphQueryFilter;
+  private final boolean phraseAsGraphQuery;
+  private final boolean explicitPhraseAsGraphQuery;
+  private final boolean multiphraseAsGraphQuery;
+  private final boolean explicitMultiphraseAsGraphQuery;
+  private final boolean useSpansForGraphQueries;
   private Query parsedUserQuery;
   private Query altUserQuery;
   private List<Query> boostQueries;
@@ -115,8 +125,24 @@ public class ExtendedDismaxQParser extends QParser {
   
   
   public ExtendedDismaxQParser(String qstr, SolrParams localParams, SolrParams params, SolrQueryRequest req) {
+    this(qstr, localParams, params, req, null, false, false, false, false, false);
+  }
+
+  public ExtendedDismaxQParser(String qstr, SolrParams localParams, SolrParams params, SolrQueryRequest req, GraphQueryFilter graphQueryFilter,
+      boolean phraseAsGraphQuery, boolean explicitPhraseAsGraphQuery,
+      boolean multiphraseAsGraphQuery, boolean explicitMultiphraseAsGraphQuery,
+      boolean useSpansForGraphQueries) {
     super(qstr, localParams, params, req);
     config = this.createConfiguration(qstr,localParams,params,req);
+    this.graphQueryFilter = graphQueryFilter;
+    if (graphQueryFilter != null) {
+      graphQueryFilter.requestInit(req);
+    }
+    this.phraseAsGraphQuery = phraseAsGraphQuery;
+    this.explicitPhraseAsGraphQuery = explicitPhraseAsGraphQuery;
+    this.multiphraseAsGraphQuery = multiphraseAsGraphQuery;
+    this.explicitMultiphraseAsGraphQuery = explicitMultiphraseAsGraphQuery;
+    this.useSpansForGraphQueries = useSpansForGraphQueries;
   }
   
   @Override
@@ -344,7 +370,8 @@ public class ExtendedDismaxQParser extends QParser {
    * to parse the query.
    */
   protected ExtendedSolrQueryParser createEdismaxQueryParser(QParser qParser, String field) {
-    return new ExtendedSolrQueryParser(qParser, field);
+    return new ExtendedSolrQueryParser(qParser, field, graphQueryFilter, config.solrParams, phraseAsGraphQuery,
+        explicitPhraseAsGraphQuery, multiphraseAsGraphQuery, explicitMultiphraseAsGraphQuery, useSpansForGraphQueries);
   }
   
   /**
@@ -952,7 +979,13 @@ public class ExtendedDismaxQParser extends QParser {
   static {
     unknownField.fillInStackTrace();
   }
-  
+
+  public static interface GraphQueryFilter {
+    void init(NamedList args, ResourceLoader loader);
+    void requestInit(SolrQueryRequest req);
+    SpanQuery filter(SpanNearQuery q, int slop, int minClauseSize, SolrParams params) throws SyntaxError;
+  }
+
   /**
    * A subclass of SolrQueryParser that supports aliasing fields for
    * constructing DisjunctionMaxQueries.
@@ -965,6 +998,14 @@ public class ExtendedDismaxQParser extends QParser {
       public float tie;
       public Map<String,Float> fields;
     }
+    
+    private final GraphQueryFilter graphQueryFilter;
+    private final SolrParams params;
+    private final boolean phraseAsGraphQuery;
+    private final boolean explicitPhraseAsGraphQuery;
+    private final boolean multiphraseAsGraphQuery;
+    private final boolean explicitMultiphraseAsGraphQuery;
+
     
     boolean makeDismax=true;
     boolean allowWildcard=true;
@@ -994,11 +1035,23 @@ public class ExtendedDismaxQParser extends QParser {
     private int slop;
     
     public ExtendedSolrQueryParser(QParser parser, String defaultField) {
+      this(parser, defaultField, null, null, false, false, false, false, false);
+    }
+    public ExtendedSolrQueryParser(QParser parser, String defaultField, GraphQueryFilter graphQueryFilter,
+        SolrParams params, boolean phraseAsGraphQuery, boolean explicitPhraseAsGraphQuery,
+        boolean multiphraseAsGraphQuery, boolean explicitMultiphraseAsGraphQuery, boolean useSpansForGraphQueries) {
       super(parser, defaultField);
       // Respect the q.op parameter before mm will be applied later
       SolrParams defaultParams = SolrParams.wrapDefaults(parser.getLocalParams(), parser.getParams());
       QueryParser.Operator defaultOp = QueryParsing.parseOP(defaultParams.get(QueryParsing.OP));
       setDefaultOperator(defaultOp);
+      this.graphQueryFilter = graphQueryFilter;
+      this.params = params;
+      this.phraseAsGraphQuery = phraseAsGraphQuery;
+      this.explicitPhraseAsGraphQuery = explicitPhraseAsGraphQuery;
+      this.multiphraseAsGraphQuery = multiphraseAsGraphQuery;
+      this.explicitMultiphraseAsGraphQuery = explicitMultiphraseAsGraphQuery;
+      this.useSpansForGraphQueries = useSpansForGraphQueries;
     }
     
     public void setRemoveStopFilter(boolean remove) {
@@ -1397,6 +1450,24 @@ public class ExtendedDismaxQParser extends QParser {
       return lst;
     }
 
+    @Override
+    protected Query analyzePhrase(String field, TokenStream stream, int slop) throws IOException {
+      if ((phraseAsGraphQuery || (explicitPhraseAsGraphQuery && minClauseSize == 0)) && (useSpansForGraphQueries || slop == 0)) {
+        return analyzeGraphPhrase(stream, field, slop);
+      } else {
+        return super.analyzePhrase(field, stream, slop);
+      }
+    }
+
+    @Override
+    protected Query analyzeMultiPhrase(String field, TokenStream stream, int slop) throws IOException {
+      if ((multiphraseAsGraphQuery || (explicitMultiphraseAsGraphQuery && minClauseSize == 0)) && (useSpansForGraphQueries || slop == 0)) {
+        return analyzeGraphPhrase(stream, field, slop);
+      } else {
+        return super.analyzeMultiPhrase(field, stream, slop);
+      }
+    }
+
     private Query getQuery() {
       try {
         
@@ -1432,6 +1503,15 @@ public class ExtendedDismaxQParser extends QParser {
               if (minClauseSize > 1 && mpq.getTermArrays().length < minClauseSize) return null;
               if (slop != mpq.getSlop()) {
                 query = new MultiPhraseQuery.Builder(mpq).setSlop(slop).build();
+              }
+            } else if (query instanceof SpanNearQuery) {
+              SpanNearQuery snq = (SpanNearQuery)query;
+              if (graphQueryFilter != null) {
+                return graphQueryFilter.filter(snq, slop, minClauseSize, params);
+              }
+              if (minClauseSize > 1 && snq.getClauses().length < minClauseSize) return null;
+              if (slop != snq.getSlop()) {
+                query = new SpanNearQuery.Builder(snq).setSlop(slop).build();
               }
             } else if (query instanceof SpanQuery) {
               return query;

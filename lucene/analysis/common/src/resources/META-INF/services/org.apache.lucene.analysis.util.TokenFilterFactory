@@ -30,6 +30,7 @@ org.apache.lucene.analysis.compound.DictionaryCompoundWordTokenFilterFactory
 org.apache.lucene.analysis.compound.HyphenationCompoundWordTokenFilterFactory
 org.apache.lucene.analysis.core.DecimalDigitFilterFactory
 org.apache.lucene.analysis.core.LowerCaseFilterFactory
+org.apache.lucene.analysis.core.PositionLengthOrderTokenFilterFactory
 org.apache.lucene.analysis.core.StopFilterFactory
 org.apache.lucene.analysis.core.TypeTokenFilterFactory
 org.apache.lucene.analysis.core.UpperCaseFilterFactory

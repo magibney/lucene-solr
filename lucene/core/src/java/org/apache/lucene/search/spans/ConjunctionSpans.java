@@ -18,6 +18,7 @@ package org.apache.lucene.search.spans;
 
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.lucene.search.DocIdSetIterator;
@@ -34,11 +35,29 @@ abstract class ConjunctionSpans extends Spans {
   boolean oneExhaustedInCurrentDoc; // one subspans exhausted in current doc
 
   ConjunctionSpans(List<Spans> subSpans) {
+    this(subSpans, null);
+  }
+
+  /**
+   * filters are used to restrict the domain of the conjunction DISI, but are *not* intended to be
+   * evaluated by matches() or twoPhaseCurrentDocMatches()
+   * @param subSpans
+   * @param filters 
+   */
+  ConjunctionSpans(List<Spans> subSpans, List<Spans> filters) {
     if (subSpans.size() < 2) {
       throw new IllegalArgumentException("Less than 2 subSpans.size():" + subSpans.size());
     }
     this.subSpans = subSpans.toArray(new Spans[subSpans.size()]);
-    this.conjunction = ConjunctionDISI.intersectSpans(subSpans);
+    final List<Spans> conjunctionSpans;
+    if (filters == null || filters.isEmpty()) {
+      conjunctionSpans = subSpans;
+    } else {
+      conjunctionSpans = new ArrayList<>(subSpans.size() + filters.size());
+      conjunctionSpans.addAll(subSpans);
+      conjunctionSpans.addAll(filters);
+    }
+    this.conjunction = ConjunctionDISI.intersectSpans(conjunctionSpans);
     this.atFirstInCurrentDoc = true; // ensure for doc -1 that start/end positions are -1
   }
 

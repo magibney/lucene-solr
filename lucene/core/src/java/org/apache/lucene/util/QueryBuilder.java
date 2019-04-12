@@ -60,6 +60,7 @@ public class QueryBuilder {
   protected Analyzer analyzer;
   protected boolean enablePositionIncrements = true;
   protected boolean enableGraphQueries = true;
+  protected boolean useSpansForGraphQueries = false;
   protected boolean autoGenerateMultiTermSynonymsPhraseQuery = false;
 
   /** Creates a new QueryBuilder using the given analyzer. */
@@ -255,6 +256,21 @@ public class QueryBuilder {
    * @lucene.experimental */
   public boolean getEnableGraphQueries() {
     return enableGraphQueries;
+  }
+
+  /** Enable or disable use of Spans for graph TokenStream processing (disabled by default).
+   *
+   * @lucene.experimental */
+  public QueryBuilder setUseSpansForGraphQueries(boolean v) {
+    useSpansForGraphQueries = v;
+    return this;
+  }
+
+  /** Returns true if use of Spans for graph TokenStream processing is enabled (default false).
+   *
+   * @lucene.experimental */
+  public boolean getUseSpansForGraphQueries() {
+    return useSpansForGraphQueries;
   }
 
   /**
@@ -547,7 +563,7 @@ public class QueryBuilder {
       throws IOException {
     source.reset();
     GraphTokenStreamFiniteStrings graph = new GraphTokenStreamFiniteStrings(source);
-    if (phraseSlop > 0) {
+    if (!useSpansForGraphQueries && phraseSlop > 0) {
       /**
        * Creates a boolean query from the graph token stream by extracting all the finite strings from the graph
        * and using them to create phrase queries with the appropriate slop.
