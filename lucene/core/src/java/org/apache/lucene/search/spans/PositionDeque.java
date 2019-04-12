@@ -2395,6 +2395,7 @@ public class PositionDeque implements Iterable<Spans> {
       return ret.ref;
     }
 
+    @SuppressWarnings({"unchecked"})
     public void returnLinksToPool(final LinkPool r) {
       final LinkTypeGroup rh = r.h;
       final LinkTypeGroup rt = r.t;
@@ -2425,25 +2426,32 @@ public class PositionDeque implements Iterable<Spans> {
   private static final class LinkTypeGroup {
 
     private static final int LINK_TYPE_GROUP_SIZE = 7;
-    private final RefLinkTracker[] links = new RefLinkTracker[LINK_TYPE_GROUP_SIZE];
+    @SuppressWarnings({"rawtypes"}) private final RefLinkTracker[] links = new RefLinkTracker[LINK_TYPE_GROUP_SIZE];
+    @SuppressWarnings({"unchecked"})
     private RefLinkTracker<DLLEndNodeLink> dllEndNodeLink() {
       return links[0];
     }
+    @SuppressWarnings({"unchecked"})
     private RefLinkTracker<DLLNode> dllNode() {
       return links[1];
     }
+    @SuppressWarnings({"unchecked"})
     private RefLinkTracker<DLLReturnNode> dllReturnNode() {
       return links[2];
     }
+    @SuppressWarnings({"unchecked"})
     private RefLinkTracker<FullEndNodeLink> fullEndNodeLink() {
       return links[3];
     }
+    @SuppressWarnings({"unchecked"})
     private RefLinkTracker<RevisitNode> revisitNode() {
       return links[4];
     }
+    @SuppressWarnings({"unchecked"})
     private RefLinkTracker<SLLNode> sllNode() {
       return links[5];
     }
+    @SuppressWarnings({"unchecked"})
     private RefLinkTracker<StoredPostings> storedPostings() {
       return links[6];
     }
