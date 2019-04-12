@@ -20,6 +20,7 @@ import java.io.Reader;
 import java.io.StringReader;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.UndeclaredThrowableException;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -35,7 +36,9 @@ import org.apache.lucene.queries.function.ValueSource;
 import org.apache.lucene.queries.function.valuesource.SortedSetFieldSource;
 import org.apache.lucene.search.SortField;
 import org.apache.lucene.search.SortedSetSelector;
+import org.apache.lucene.util.Attribute;
 import org.apache.lucene.util.AttributeFactory;
+import org.apache.lucene.util.AttributeImpl;
 import org.apache.lucene.util.AttributeSource.State;
 import org.apache.lucene.util.AttributeSource;
 import org.apache.solr.analysis.SolrAnalyzer;
@@ -271,6 +274,16 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
     return f;
   }
 
+  private static class CachingAttributeFactory extends AttributeFactory {
+
+    private final AttributeSource cachedAttributes = new AttributeSource(AttributeFactory.DEFAULT_ATTRIBUTE_FACTORY);
+
+    @Override
+    public AttributeImpl createAttributeInstance(Class<? extends Attribute> attClass) throws UndeclaredThrowableException {
+      return (AttributeImpl) cachedAttributes.addAttribute(attClass);
+    }
+
+  }
   /**
    * Token stream that works from a list of saved states.
    */
@@ -285,7 +298,7 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
 
     public PreAnalyzedTokenizer(PreAnalyzedParser parser) {
       // we don't pack attributes: since we are used for (de)serialization and dont want bloat.
-      super(AttributeFactory.DEFAULT_ATTRIBUTE_FACTORY);
+      super(new CachingAttributeFactory());
       this.parser = parser;
     }
     
@@ -327,6 +340,10 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
         throw e;
       }
       it = cachedStates.iterator();
+
+//      // preload attributes cached in org.apache.lucene.index.FieldInvertState.setAttributeSource(AttributeSource attributeSource)
+//      addAttribute(CharTermAttribute.class);
+//      addAttribute(PayloadAttribute.class);
     }
 
     @Override
@@ -364,11 +381,15 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
     }
   }
 
-  private static class PreAnalyzedAnalyzer extends SolrAnalyzer {
+  public static class PreAnalyzedAnalyzer extends SolrAnalyzer {
     private PreAnalyzedParser parser;
 
     PreAnalyzedAnalyzer(PreAnalyzedParser parser) {
       this.parser = parser;
+    }
+
+    PreAnalyzedAnalyzer() {
+      this.parser = new JsonPreAnalyzedParser();
     }
 
     @Override

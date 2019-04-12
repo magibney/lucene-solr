@@ -30,9 +30,12 @@ import java.util.TreeMap;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.apache.lucene.analysis.tokenattributes.FlagsAttribute;
+import org.apache.lucene.analysis.tokenattributes.KeywordAttribute;
 import org.apache.lucene.analysis.tokenattributes.OffsetAttribute;
 import org.apache.lucene.analysis.tokenattributes.PayloadAttribute;
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
+import org.apache.lucene.analysis.tokenattributes.PositionLengthAttribute;
+import org.apache.lucene.analysis.tokenattributes.TermFrequencyAttribute;
 import org.apache.lucene.analysis.tokenattributes.TermToBytesRefAttribute;
 import org.apache.lucene.analysis.tokenattributes.TypeAttribute;
 import org.apache.lucene.document.Field;
@@ -61,14 +64,16 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
   public static final String OFFSET_START_KEY = "s";
   public static final String OFFSET_END_KEY = "e";
   public static final String POSINCR_KEY = "i";
+  public static final String POSLENGTH_KEY = "l";
+  public static final String TERM_FREQUENCY_KEY = "q";
+  public static final String KEYWORD_KEY = "k";
   public static final String PAYLOAD_KEY = "p";
   public static final String TYPE_KEY = "y";
   public static final String FLAGS_KEY = "f";
 
   @SuppressWarnings("unchecked")
   @Override
-  public ParseResult parse(Reader reader, AttributeSource parent)
-      throws IOException {
+  public ParseResult parse(Reader reader, AttributeSource parent) throws IOException {
     ParseResult res = new ParseResult();
     StringBuilder sb = new StringBuilder();
     char[] buf = new char[128];
@@ -163,6 +168,44 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
           }
           PositionIncrementAttribute patt = parent.addAttribute(PositionIncrementAttribute.class);
           patt.setPositionIncrement(posIncr);
+        } else if (key.equals(POSLENGTH_KEY)) {
+          Object obj = e.getValue();
+          int posLength = 1;
+          if (obj instanceof Number) {
+            posLength = ((Number)obj).intValue();
+          } else {
+            try {
+              posLength = Integer.parseInt(String.valueOf(obj));
+            } catch (NumberFormatException nfe) {
+              log.warn("Invalid " + POSLENGTH_KEY + " attribute, skipped: '" + obj + "'");
+            }
+          }
+          PositionLengthAttribute platt = parent.addAttribute(PositionLengthAttribute.class);
+          platt.setPositionLength(posLength);
+        } else if (key.equals(TERM_FREQUENCY_KEY)) {
+          Object obj = e.getValue();
+          final int termFrequency;
+          try {
+            if (obj instanceof Number) {
+              termFrequency = ((Number)obj).intValue();
+            } else {
+              termFrequency = Integer.parseInt(String.valueOf(obj));
+            }
+            TermFrequencyAttribute tfAtt = parent.addAttribute(TermFrequencyAttribute.class);
+            tfAtt.setTermFrequency(termFrequency);
+          } catch (NumberFormatException nfe) {
+            log.warn("Invalid " + TERM_FREQUENCY_KEY + " attribute, skipped: '" + obj + "'");
+          }
+        } else if (key.equals(KEYWORD_KEY)) {
+          Object obj = e.getValue();
+          final boolean isKeyword;
+          if (obj instanceof Boolean) {
+            isKeyword = ((Boolean)obj).booleanValue();
+          } else {
+            isKeyword = Boolean.parseBoolean(String.valueOf(obj));
+          }
+          KeywordAttribute keywordAtt = parent.addAttribute(KeywordAttribute.class);
+          keywordAtt.setKeyword(isKeyword);
         } else if (key.equals(PAYLOAD_KEY)) {
           String str = String.valueOf(e.getValue());
           if (str.length() > 0) {
@@ -252,6 +295,12 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
               }
             } else if (cl.isAssignableFrom(PositionIncrementAttribute.class)) {
               tok.put(POSINCR_KEY, ((PositionIncrementAttribute)att).getPositionIncrement());
+            } else if (cl.isAssignableFrom(PositionLengthAttribute.class)) {
+              tok.put(POSLENGTH_KEY, ((PositionLengthAttribute)att).getPositionLength());
+            } else if (cl.isAssignableFrom(TermFrequencyAttribute.class)) {
+              tok.put(TERM_FREQUENCY_KEY, ((TermFrequencyAttribute)att).getTermFrequency());
+            } else if (cl.isAssignableFrom(KeywordAttribute.class)) {
+              tok.put(KEYWORD_KEY, ((KeywordAttribute)att).isKeyword());
             } else if (cl.isAssignableFrom(TypeAttribute.class)) {
               tok.put(TYPE_KEY, ((TypeAttribute)att).type());
             } else {

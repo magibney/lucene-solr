@@ -124,6 +124,47 @@ public final class SpanOrQuery extends SpanQuery {
     return new SpanOrWeight(searcher, scoreMode.needsScores() ? getTermStates(subWeights) : null, subWeights, boost);
   }
 
+  private static abstract class LookaheadSpans extends Spans implements IndexLookahead {
+
+    protected int lookaheadNextStartPositionFloor;
+    protected int positionLengthCeiling;
+    protected int positionLengthFloor;
+
+    public LookaheadSpans(boolean someImplementLookahead) {
+      if (someImplementLookahead) {
+        lookaheadNextStartPositionFloor = UNINITIALIZED_AT_SPANS;
+        positionLengthCeiling = UNINITIALIZED_AT_SPANS;
+      } else {
+        lookaheadNextStartPositionFloor = NO_INDEX_LOOKAHEAD_IMPLEMENTED;
+        positionLengthCeiling = NO_INDEX_LOOKAHEAD_IMPLEMENTED;
+      }
+    }
+  }
+
+  private static class LookaheadSpanPositionQueue extends SpanPositionQueue {
+
+    private final Object[] heap;
+
+    public LookaheadSpanPositionQueue(int maxSize) {
+      super(maxSize);
+      heap = super.getHeapArray();
+    }
+
+    /**
+     * return the least of two children of top node
+     */
+    public int lookaheadCandidateStartPosition(int size) {
+      switch(size) {
+        case 1:
+          throw new IllegalStateException("don't call when size == 1");
+        case 2:
+          return ((Spans)heap[2]).startPosition();
+        default:
+          return Math.min(((Spans)heap[2]).startPosition(), ((Spans)heap[3]).startPosition());
+      }
+    }
+  }
+
   public class SpanOrWeight extends SpanWeight {
 
     final List<SpanWeight> subWeights;
@@ -162,10 +203,14 @@ public final class SpanOrQuery extends SpanQuery {
 
       ArrayList<Spans> subSpans = new ArrayList<>(clauses.size());
 
+      boolean someImplementLookahead = false;
       for (SpanWeight w : subWeights) {
         Spans spans = w.getSpans(context, requiredPostings);
         if (spans != null) {
           subSpans.add(spans);
+          if (!someImplementLookahead && spans instanceof IndexLookahead) {
+            someImplementLookahead = true;
+          }
         }
       }
 
@@ -180,14 +225,64 @@ public final class SpanOrQuery extends SpanQuery {
         byDocQueue.add(new DisiWrapper(spans));
       }
 
-      SpanPositionQueue byPositionQueue = new SpanPositionQueue(subSpans.size()); // when empty use -1
+      LookaheadSpanPositionQueue byPositionQueue = new LookaheadSpanPositionQueue(subSpans.size()); // when empty use -1
 
-      return new Spans() {
+      return new LookaheadSpans(someImplementLookahead) {
+
+        @Override
+        public int lookaheadNextStartPositionFloor() throws IOException {
+          switch(lookaheadNextStartPositionFloor) {
+            case UNINITIALIZED_AT_POSITION:
+              lookaheadNextStartPositionFloor = initializeLookaheadAtPosition();
+          }
+          return lookaheadNextStartPositionFloor;
+        }
+
+        private int initializeLookaheadAtPosition() throws IOException {
+          if (!(topPositionSpans instanceof IndexLookahead)) {
+            return UNKNOWN_AT_POSITION;
+          } else {
+            final int topLookahead = ((IndexLookahead)topPositionSpans).lookaheadNextStartPositionFloor();
+            final int positionQueueSize;
+            if (topLookahead < 0) {
+              return UNKNOWN_AT_POSITION;
+            } else if ((positionQueueSize = byPositionQueue.size()) < 2) {
+              return topLookahead;
+            } else {
+              return Math.min(topLookahead, byPositionQueue.lookaheadCandidateStartPosition(positionQueueSize));
+            }
+          }
+        }
+
+        @Override
+        public int positionLengthCeiling() {
+          return positionLengthCeiling;
+        }
+
+        @Override
+        public int positionLengthFloor() {
+          return positionLengthFloor;
+        }
+
+        @Override
+        public int endPositionDecreaseCeiling() throws IOException {
+          final int lookahead = lookaheadNextStartPositionFloor();
+          final int theoreticalStart = lookahead < 0 ? startPosition() + 1 : lookahead;
+          final int endPosition = endPosition();
+          final int theoreticalEnd;
+          if (theoreticalStart >= endPosition || (theoreticalEnd = theoreticalStart + positionLengthFloor()) >= endPosition) {
+            return 0;
+          } else {
+            return endPosition - theoreticalEnd;
+          }
+        }
+
         Spans topPositionSpans = null;
 
         @Override
         public int nextDoc() throws IOException {
           topPositionSpans = null;
+          resetLookaheadAtDoc();
           DisiWrapper topDocSpans = byDocQueue.top();
           int currentDoc = topDocSpans.doc;
           do {
@@ -200,6 +295,7 @@ public final class SpanOrQuery extends SpanQuery {
         @Override
         public int advance(int target) throws IOException {
           topPositionSpans = null;
+          resetLookaheadAtDoc();
           DisiWrapper topDocSpans = byDocQueue.top();
           do {
             topDocSpans.doc = topDocSpans.iterator.advance(target);
@@ -271,6 +367,7 @@ public final class SpanOrQuery extends SpanQuery {
         int lastDocTwoPhaseMatched = -1;
 
         boolean twoPhaseCurrentDocMatches() throws IOException {
+          resetLookaheadAtDoc();
           DisiWrapper listAtCurrentDoc = byDocQueue.topList();
           // remove the head of the list as long as it does not match
           final int currentDoc = listAtCurrentDoc.doc;
@@ -290,6 +387,24 @@ public final class SpanOrQuery extends SpanQuery {
           lastDocTwoPhaseMatched = currentDoc;
           topPositionSpans = null;
           return true;
+        }
+
+        private void resetLookaheadAtDoc() {
+          switch(positionLengthCeiling) {
+            case UNKNOWN_AT_SPANS:
+              break;
+            case NO_INDEX_LOOKAHEAD_IMPLEMENTED:
+              return;
+            default:
+              positionLengthCeiling = 0;
+          }
+          switch(lookaheadNextStartPositionFloor) {
+            case UNKNOWN_AT_SPANS:
+              break;
+            default:
+              lookaheadNextStartPositionFloor = UNINITIALIZED_AT_DOC;
+          }
+          positionLengthFloor = Integer.MAX_VALUE;
         }
 
         void fillPositionQueue() throws IOException { // called at first nextStartPosition
@@ -317,11 +432,68 @@ public final class SpanOrQuery extends SpanQuery {
               assert spansAtDoc.startPosition() == -1;
               spansAtDoc.nextStartPosition();
               assert spansAtDoc.startPosition() != NO_MORE_POSITIONS;
+              initLookaheadForSubspan(spansAtDoc);
               byPositionQueue.add(spansAtDoc);
             }
             listAtCurrentDoc = listAtCurrentDoc.next;
           }
+          if (positionLengthCeiling >= MIN_POSITION_LENGTH_CEILING_WITH_POSSIBLE_ENDPOSITION_DECREASE) {
+            positionLengthCeiling = ~positionLengthCeiling;
+          }
+          if (lookaheadNextStartPositionFloor == UNINITIALIZED_AT_DOC) {
+            // no subspans have lookahead available at this doc
+            lookaheadNextStartPositionFloor = UNKNOWN_AT_DOC;
+          }
           assert byPositionQueue.size() > 0;
+        }
+
+        private void initLookaheadForSubspan(Spans spansAtDoc) throws IOException {
+          if (positionLengthCeiling >= 0) {
+            if (!(spansAtDoc instanceof IndexLookahead)) {
+              positionLengthCeiling = UNKNOWN_AT_DOC; // can't optimize
+            } else {
+              final IndexLookahead lookahead = (IndexLookahead)spansAtDoc;
+              final int candidatePositionLengthCeiling = lookahead.positionLengthCeiling();
+              if (candidatePositionLengthCeiling <= MAX_SPECIAL_VALUE) {
+                positionLengthCeiling = UNKNOWN_AT_DOC; // can't optimize
+              } else {
+                final int positiveCandidatePositionLengthCeiling = candidatePositionLengthCeiling < 0 ? ~candidatePositionLengthCeiling : candidatePositionLengthCeiling;
+                if (positiveCandidatePositionLengthCeiling > positionLengthCeiling) {
+                  positionLengthCeiling = positiveCandidatePositionLengthCeiling;
+                }
+              }
+              if (lookaheadNextStartPositionFloor == UNINITIALIZED_AT_DOC && mayHavePositionLookahead(lookahead)) {
+                lookaheadNextStartPositionFloor = UNINITIALIZED_AT_POSITION;
+              }
+            }
+          } else if (lookaheadNextStartPositionFloor == UNINITIALIZED_AT_DOC && spansAtDoc instanceof IndexLookahead && mayHavePositionLookahead((IndexLookahead)spansAtDoc)) {
+            lookaheadNextStartPositionFloor = UNINITIALIZED_AT_POSITION;
+          }
+          if (positionLengthFloor > 1) {
+            if (!(spansAtDoc instanceof IndexLookahead)) {
+              positionLengthFloor = 1;
+            } else {
+              final int candidatePositionLengthFloor = ((IndexLookahead)spansAtDoc).positionLengthFloor();
+              if (candidatePositionLengthFloor < positionLengthFloor) {
+                positionLengthFloor = candidatePositionLengthFloor;
+              }
+            }
+          }
+        }
+
+        private boolean mayHavePositionLookahead(IndexLookahead spansAtDoc) throws IOException {
+          switch (spansAtDoc.lookaheadNextStartPositionFloor()) {
+            case UNINITIALIZED_AT_DOC:
+            case UNINITIALIZED_AT_POSITION:
+            case UNINITIALIZED_AT_SPANS:
+            case NO_INDEX_LOOKAHEAD_IMPLEMENTED:
+              throw new AssertionError("this should never happen");
+            case UNKNOWN_AT_SPANS:
+            case UNKNOWN_AT_DOC:
+              return false;
+            default:
+              return true;
+          }
         }
 
         @Override
@@ -333,6 +505,14 @@ public final class SpanOrQuery extends SpanQuery {
           } else {
             topPositionSpans.nextStartPosition();
             topPositionSpans = byPositionQueue.updateTop();
+            switch (lookaheadNextStartPositionFloor) {
+              case NO_INDEX_LOOKAHEAD_IMPLEMENTED:
+              case UNKNOWN_AT_DOC:
+              case UNKNOWN_AT_SPANS:
+                break;
+              default:
+                lookaheadNextStartPositionFloor = UNINITIALIZED_AT_POSITION;
+            }
           }
           return topPositionSpans.startPosition();
         }
