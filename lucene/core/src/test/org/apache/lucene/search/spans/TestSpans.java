@@ -398,14 +398,14 @@ public class TestSpans extends LuceneTestCase {
     assertEquals("SpanNotS3NotS1_8_8", 0, spanCount("s3", 0, "s1", 8, 8));
 
     // Negative values
-    assertEquals("SpanNotS2S1NotXXNeg_0_0", 1, spanCount("s2 s1", 10, "xx", 0, 0));
-    assertEquals("SpanNotS2S1NotXXNeg_1_1", 1, spanCount("s2 s1", 10, "xx", -1, -1));
-    assertEquals("SpanNotS2S1NotXXNeg_0_2", 2, spanCount("s2 s1", 10, "xx",  0, -2));
-    assertEquals("SpanNotS2S1NotXXNeg_1_2", 2, spanCount("s2 s1", 10, "xx", -1, -2));
-    assertEquals("SpanNotS2S1NotXXNeg_2_1", 2, spanCount("s2 s1", 10, "xx", -2, -1));
-    assertEquals("SpanNotS2S1NotXXNeg_3_1", 2, spanCount("s2 s1", 10, "xx", -3, -1));
-    assertEquals("SpanNotS2S1NotXXNeg_1_3", 2, spanCount("s2 s1", 10, "xx", -1, -3));
-    assertEquals("SpanNotS2S1NotXXNeg_2_2", 3, spanCount("s2 s1", 10, "xx", -2, -2));
+    assertEquals("SpanNotS2S1NotXXNeg_0_0", 2, spanCount("s2 s1", 10, "xx", 0, 0));
+    assertEquals("SpanNotS2S1NotXXNeg_1_1", 2, spanCount("s2 s1", 10, "xx", -1, -1));
+    assertEquals("SpanNotS2S1NotXXNeg_0_2", 3, spanCount("s2 s1", 10, "xx",  0, -2));
+    assertEquals("SpanNotS2S1NotXXNeg_1_2", 3, spanCount("s2 s1", 10, "xx", -1, -2));
+    assertEquals("SpanNotS2S1NotXXNeg_2_1", 3, spanCount("s2 s1", 10, "xx", -2, -1));
+    assertEquals("SpanNotS2S1NotXXNeg_3_1", 3, spanCount("s2 s1", 10, "xx", -3, -1));
+    assertEquals("SpanNotS2S1NotXXNeg_1_3", 3, spanCount("s2 s1", 10, "xx", -1, -3));
+    assertEquals("SpanNotS2S1NotXXNeg_2_2", 4, spanCount("s2 s1", 10, "xx", -2, -2));
   }
 
 
