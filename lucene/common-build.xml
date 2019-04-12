@@ -900,7 +900,14 @@
     <ant dir="${common.dir}/tools" target="compile-core" inheritAll="false"/>
   </target>
 
-  <target name="compile-test" depends="compile-core,compile-test-framework">
+  <target name="compile-analyzers-common" unless="lucene.analyzers.common.compiled">
+    <ant dir="${common.dir}/analysis/common" target="compile-core" inheritAll="false">
+      <propertyset refid="uptodate.and.compiled.properties"/>
+    </ant>
+    <property name="lucene.analyzers.common.compiled" value="true"/>
+  </target>
+
+  <target name="compile-test" depends="compile-core,compile-test-framework,compile-analyzers-common">
     <compile-test-macro srcdir="${tests.src.dir}" destdir="${build.dir}/classes/test" test.classpath="test.classpath"/>
   </target>
 
