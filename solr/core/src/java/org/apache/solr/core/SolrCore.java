@@ -235,16 +235,12 @@ public final class SolrCore implements SolrInfoBean, SolrMetricProducer, Closeab
   private Set<String> metricNames = ConcurrentHashMap.newKeySet();
   private String metricTag = Integer.toHexString(hashCode());
 
-  public boolean searchEnabled = true;
-  public boolean indexEnabled = true;
+  public volatile boolean searchEnabled = true;
+  public volatile boolean indexEnabled = true;
   public volatile boolean readOnly = false;
 
   public Set<String> getMetricNames() {
     return metricNames;
-  }
-
-  public boolean isSearchEnabled(){
-    return searchEnabled;
   }
 
   public Date getStartTimeStamp() { return startTime; }
@@ -1004,6 +1000,9 @@ public final class SolrCore implements SolrInfoBean, SolrMetricProducer, Closeab
       // Initialize the RestManager
       restManager = initRestManager();
 
+      // at this point we can load jars loaded from remote urls.
+      memClassLoader.loadRemoteJars();
+
       // Finally tell anyone who wants to know
       resourceLoader.inform(resourceLoader);
       resourceLoader.inform(this); // last call before the latch is released.
@@ -1699,17 +1698,6 @@ public final class SolrCore implements SolrInfoBean, SolrMetricProducer, Closeab
       return refCount.get() <= 0;
   }
 
-  @Override
-  protected void finalize() throws Throwable {
-    try {
-      if (getOpenCount() != 0) {
-        log.error("REFCOUNT ERROR: unreferenced {} ({}) has a reference count of {}", this, getName(), getOpenCount());
-      }
-    } finally {
-      super.finalize();
-    }
-  }
-
   private Collection<CloseHook> closeHooks = null;
 
    /**
@@ -1880,7 +1868,10 @@ public final class SolrCore implements SolrInfoBean, SolrMetricProducer, Closeab
    * @see #withSearcher(IOFunction)
    */
   public RefCounted<SolrIndexSearcher> getSearcher() {
-    return getSearcher(false,true,null);
+    if ( searchEnabled ) {
+      return getSearcher(false,true,null);
+    }
+    throw new SolrException( SolrException.ErrorCode.SERVICE_UNAVAILABLE, "Search is temporarily disabled");
   }
 
   /**
@@ -2698,7 +2689,7 @@ public final class SolrCore implements SolrInfoBean, SolrMetricProducer, Closeab
     DEFAULT_RESPONSE_WRITERS = Collections.unmodifiableMap(m);
     try {
       m.put("xlsx",
-          (QueryResponseWriter) Class.forName("org.apache.solr.handler.extraction.XLSXResponseWriter").newInstance());
+          (QueryResponseWriter) Class.forName("org.apache.solr.handler.extraction.XLSXResponseWriter").getConstructor().newInstance());
     } catch (Exception e) {
       //don't worry; solrcell contrib not in class path
     }
