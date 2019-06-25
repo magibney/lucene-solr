@@ -22,9 +22,13 @@ import org.apache.lucene.analysis.util.TokenFilterFactory;
 
 /**
  *
+ * @lucene.spi {@value #NAME}
  */
 public class PositionLengthOrderTokenFilterFactory extends TokenFilterFactory {
-  
+
+  /** SPI name */
+  public static final String NAME = "positionLengthOrder";
+
   public static final String INDEX_LOOKAHEAD_ARGNAME = "indexLookahead";
   public static final boolean INDEX_LOOKAHEAD_DEFAULT = false;
   private final boolean indexLookahead;
