@@ -20,11 +20,14 @@ package org.apache.solr.cloud.api.collections;
 import java.lang.invoke.MethodHandles;
 import java.text.ParseException;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.apache.solr.client.solrj.SolrResponse;
@@ -103,9 +106,9 @@ public class MaintainTimeRoutedAliasCmd extends AliasCmd {
     final ZkStateReader.AliasesManager aliasesManager = ocmh.zkStateReader.aliasesManager;
     final Aliases aliases = aliasesManager.getAliases();
     final Map<String, String> aliasMetadata = aliases.getCollectionAliasProperties(aliasName);
-    if (aliasMetadata == null) {
+    if (aliasMetadata.isEmpty()) {
       throw new SolrException(SolrException.ErrorCode.BAD_REQUEST,
-          "Alias " + aliasName + " does not exist."); // if it did exist, we'd have a non-null map
+          "Alias " + aliasName + " does not exist or is not a routed alias."); // if it did exist, we'd have a non-null map
     }
     final TimeRoutedAlias timeRoutedAlias = new TimeRoutedAlias(aliasName, aliasMetadata);
 
@@ -190,22 +193,38 @@ public class MaintainTimeRoutedAliasCmd extends AliasCmd {
       // (and all newer to left) but we delete older collections, which are the ones that follow.
       // This logic will always keep the first collection, which we can't delete.
       int numToKeep = 0;
+      DateTimeFormatter dtf = null;
+      if (log.isDebugEnabled()) {
+        dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.n", Locale.ROOT);
+        dtf = dtf.withZone(ZoneId.of("UTC"));
+      }
       for (Map.Entry<Instant, String> parsedCollection : parsedCollections) {
         numToKeep++;
         final Instant colInstant = parsedCollection.getKey();
         if (colInstant.isBefore(delBefore) || colInstant.equals(delBefore)) {
+          if (log.isDebugEnabled()) { // don't perform formatting unless debugging
+            log.debug("{} is equal to or before {} deletions may be required", dtf.format(colInstant),dtf.format(delBefore));
+          }
           break;
+        } else {
+          if (log.isDebugEnabled()) { // don't perform formatting unless debugging
+            log.debug("{} is not before {} and will be retained", dtf.format(colInstant),dtf.format(delBefore));
+          }
         }
       }
       if (numToKeep == parsedCollections.size()) {
-        log.debug("No old time routed collections to delete.");
+        log.debug("No old time routed collections to delete... parsed collections={}", parsedCollections);
         return curAliases;
       }
-
-      final List<String> targetList = curAliases.getCollectionAliasListMap().get(aliasName);
+      log.debug("Collections will be deleted... parsed collections={}", parsedCollections);
+      Map<String, List<String>> collectionAliasListMap = curAliases.getCollectionAliasListMap();
+      final List<String> targetList = collectionAliasListMap.get(aliasName);
       // remember to delete these... (oldest to newest)
+      log.debug("Iterating backwards on collection list to find deletions: {}", targetList);
       for (int i = targetList.size() - 1; i >= numToKeep; i--) {
-        collectionsToDelete.add(targetList.get(i));
+        String toDelete = targetList.get(i);
+        log.debug("Adding to TRA delete list:{}",toDelete);
+        collectionsToDelete.add(toDelete);
       }
       // new alias list has only "numToKeep" first items
       final List<String> collectionsToKeep = targetList.subList(0, numToKeep);

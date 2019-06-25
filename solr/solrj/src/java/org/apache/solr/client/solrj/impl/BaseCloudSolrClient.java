@@ -42,6 +42,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import org.apache.solr.client.solrj.ResponseParser;
@@ -62,6 +63,7 @@ import org.apache.solr.common.cloud.ClusterState;
 import org.apache.solr.common.cloud.CollectionStatePredicate;
 import org.apache.solr.common.cloud.CollectionStateWatcher;
 import org.apache.solr.common.cloud.DocCollection;
+import org.apache.solr.common.cloud.DocCollectionWatcher;
 import org.apache.solr.common.cloud.DocRouter;
 import org.apache.solr.common.cloud.ImplicitDocRouter;
 import org.apache.solr.common.cloud.Replica;
@@ -362,11 +364,21 @@ public abstract class BaseCloudSolrClient extends SolrClient {
   }
 
   /**
-   * Block until a collection state matches a predicate, or a timeout
+   * Block until a CollectionStatePredicate returns true, or the wait times out
    *
+   * <p>
    * Note that the predicate may be called again even after it has returned true, so
    * implementors should avoid changing state within the predicate call itself.
+   * </p>
    *
+   * <p>
+   * This implementation utilizes {@link CollectionStateWatcher} internally. 
+   * Callers that don't care about liveNodes are encouraged to use a {@link DocCollection} {@link Predicate} 
+   * instead
+   * </p>
+   *
+   * @see #waitForState(String, long, TimeUnit, Predicate)
+   * @see #registerCollectionStateWatcher
    * @param collection the collection to watch
    * @param wait       how long to wait
    * @param unit       the units of the wait parameter
@@ -379,20 +391,68 @@ public abstract class BaseCloudSolrClient extends SolrClient {
     getClusterStateProvider().connect();
     assertZKStateProvider().zkStateReader.waitForState(collection, wait, unit, predicate);
   }
+  /**
+   * Block until a Predicate returns true, or the wait times out
+   *
+   * <p>
+   * Note that the predicate may be called again even after it has returned true, so
+   * implementors should avoid changing state within the predicate call itself.
+   * </p>
+   *
+   * @see #registerDocCollectionWatcher
+   * @param collection the collection to watch
+   * @param wait       how long to wait
+   * @param unit       the units of the wait parameter
+   * @param predicate  a {@link Predicate} to test against the {@link DocCollection}
+   * @throws InterruptedException on interrupt
+   * @throws TimeoutException     on timeout
+   */
+  public void waitForState(String collection, long wait, TimeUnit unit, Predicate<DocCollection> predicate)
+      throws InterruptedException, TimeoutException {
+    getClusterStateProvider().connect();
+    assertZKStateProvider().zkStateReader.waitForState(collection, wait, unit, predicate);
+  }
 
   /**
    * Register a CollectionStateWatcher to be called when the cluster state for a collection changes
+   * <em>or</em> the set of live nodes changes.
    *
-   * Note that the watcher is unregistered after it has been called once.  To make a watcher persistent,
-   * it should re-register itself in its {@link CollectionStateWatcher#onStateChanged(Set, DocCollection)}
-   * call
+   * <p>
+   * The Watcher will automatically be removed when it's 
+   * <code>onStateChanged</code> returns <code>true</code>
+   * </p>
    *
+   * <p>
+   * This implementation utilizes {@link ZkStateReader#registerCollectionStateWatcher} internally.
+   * Callers that don't care about liveNodes are encouraged to use a {@link DocCollectionWatcher} 
+   * instead
+   * </p>
+   *
+   * @see #registerDocCollectionWatcher(String, DocCollectionWatcher)
+   * @see ZkStateReader#registerCollectionStateWatcher
    * @param collection the collection to watch
    * @param watcher    a watcher that will be called when the state changes
    */
   public void registerCollectionStateWatcher(String collection, CollectionStateWatcher watcher) {
     getClusterStateProvider().connect();
     assertZKStateProvider().zkStateReader.registerCollectionStateWatcher(collection, watcher);
+  }
+  
+  /**
+   * Register a DocCollectionWatcher to be called when the cluster state for a collection changes.
+   *
+   * <p>
+   * The Watcher will automatically be removed when it's 
+   * <code>onStateChanged</code> returns <code>true</code>
+   * </p>
+   *
+   * @see ZkStateReader#registerDocCollectionWatcher
+   * @param collection the collection to watch
+   * @param watcher    a watcher that will be called when the state changes
+   */
+  public void registerDocCollectionWatcher(String collection, DocCollectionWatcher watcher) {
+    getClusterStateProvider().connect();
+    assertZKStateProvider().zkStateReader.registerDocCollectionWatcher(collection, watcher);
   }
 
   private NamedList<Object> directUpdate(AbstractUpdateRequest request, String collection) throws SolrServerException {
@@ -413,9 +473,15 @@ public abstract class BaseCloudSolrClient extends SolrClient {
       throw new SolrServerException("No collection param specified on request and no default collection has been set.");
     }
 
-    //Check to see if the collection is an alias.
+    //Check to see if the collection is an alias. Updates to multi-collection aliases are ok as long
+    // as they are routed aliases
     List<String> aliasedCollections = getClusterStateProvider().resolveAlias(collection);
-    collection = aliasedCollections.get(0); // pick 1st (consistent with HttpSolrCall behavior)
+    if (getClusterStateProvider().isRoutedAlias(collection) || aliasedCollections.size() == 1) {
+      collection = aliasedCollections.get(0); // pick 1st (consistent with HttpSolrCall behavior)
+    } else {
+      throw new SolrException(SolrException.ErrorCode.BAD_REQUEST, "Update request to non-routed multi-collection alias not supported: "
+        + collection + " -> " + aliasedCollections);
+    }
 
     DocCollection col = getDocCollection(collection, null);
 
@@ -786,8 +852,9 @@ public abstract class BaseCloudSolrClient extends SolrClient {
       isCollectionRequestOfV2 = ((V2Request) request).isPerCollectionRequest();
     }
     boolean isAdmin = ADMIN_PATHS.contains(request.getPath());
+    boolean isUpdate = (request instanceof IsUpdateRequest) && (request instanceof UpdateRequest);
     if (!inputCollections.isEmpty() && !isAdmin && !isCollectionRequestOfV2) { // don't do _stateVer_ checking for admin, v2 api requests
-      Set<String> requestedCollectionNames = resolveAliases(inputCollections);
+      Set<String> requestedCollectionNames = resolveAliases(inputCollections, isUpdate);
 
       StringBuilder stateVerParamBuilder = null;
       for (String requestedCollection : requestedCollectionNames) {
@@ -957,9 +1024,15 @@ public abstract class BaseCloudSolrClient extends SolrClient {
     connect();
 
     boolean sendToLeaders = false;
+    boolean isUpdate = false;
 
     if (request instanceof IsUpdateRequest) {
       if (request instanceof UpdateRequest) {
+        isUpdate = true;
+        if (inputCollections.size() > 1) {
+          throw new SolrException(SolrException.ErrorCode.BAD_REQUEST, "Update request must be sent to a single collection " +
+              "or an alias: " + inputCollections);
+        }
         String collection = inputCollections.isEmpty() ? null : inputCollections.get(0); // getting first mimics HttpSolrCall
         NamedList<Object> response = directUpdate((AbstractUpdateRequest) request, collection);
         if (response != null) {
@@ -993,7 +1066,7 @@ public abstract class BaseCloudSolrClient extends SolrClient {
       }
 
     } else { // Typical...
-      Set<String> collectionNames = resolveAliases(inputCollections);
+      Set<String> collectionNames = resolveAliases(inputCollections, isUpdate);
       if (collectionNames.isEmpty()) {
         throw new SolrException(SolrException.ErrorCode.BAD_REQUEST,
             "No collection param specified on request and no default collection has been set: " + inputCollections);
@@ -1057,17 +1130,20 @@ public abstract class BaseCloudSolrClient extends SolrClient {
   }
 
   /** Resolves the input collections to their possible aliased collections. Doesn't validate collection existence. */
-  private LinkedHashSet<String> resolveAliases(List<String> inputCollections) {
-    LinkedHashSet<String> collectionNames = new LinkedHashSet<>(); // consistent ordering
+  private Set<String> resolveAliases(List<String> inputCollections, boolean isUpdate) {
+    if (inputCollections.isEmpty()) {
+      return Collections.emptySet();
+    }
+    LinkedHashSet<String> uniqueNames = new LinkedHashSet<>(); // consistent ordering
     for (String collectionName : inputCollections) {
       if (getClusterStateProvider().getState(collectionName) == null) {
         // perhaps it's an alias
-        collectionNames.addAll(getClusterStateProvider().resolveAlias(collectionName));
+        uniqueNames.addAll(getClusterStateProvider().resolveAlias(collectionName));
       } else {
-        collectionNames.add(collectionName); // it's a collection
+        uniqueNames.add(collectionName); // it's a collection
       }
     }
-    return collectionNames;
+    return uniqueNames;
   }
 
   public boolean isUpdatesToLeaders() {

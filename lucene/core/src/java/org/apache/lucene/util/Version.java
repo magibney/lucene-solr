@@ -118,6 +118,13 @@ public final class Version {
   public static final Version LUCENE_7_7_1 = new Version(7, 7, 1);
 
   /**
+   * Match settings and bugs in Lucene's 7.7.2 release.
+   * @deprecated Use latest
+   */
+  @Deprecated
+  public static final Version LUCENE_7_7_2 = new Version(7, 7, 2);
+
+  /**
    * Match settings and bugs in Lucene's 7.8.0 release.
    * @deprecated Use latest
    */
@@ -133,11 +140,25 @@ public final class Version {
 
   /**
    * Match settings and bugs in Lucene's 8.1.0 release.
+   * @deprecated (8.2.0) Use latest
+   */
+  @Deprecated
+  public static final Version LUCENE_8_1_0 = new Version(8, 1, 0);
+
+  /**
+   * Match settings and bugs in Lucene's 8.1.1 release.
+   * @deprecated Use latest
+   */
+  @Deprecated
+  public static final Version LUCENE_8_1_1 = new Version(8, 1, 1);
+
+  /**
+   * Match settings and bugs in Lucene's 8.2.0 release.
    * <p>
    * Use this to get the latest &amp; greatest settings, bug
    * fixes, etc, for Lucene.
    */
-  public static final Version LUCENE_8_1_0 = new Version(8, 1, 0);
+  public static final Version LUCENE_8_2_0 = new Version(8, 2, 0);
 
   // To add a new version:
   //  * Only add above this comment
@@ -158,7 +179,7 @@ public final class Version {
    * some defaults may have changed and may break functionality 
    * in your application.
    */
-  public static final Version LATEST = LUCENE_8_1_0;
+  public static final Version LATEST = LUCENE_8_2_0;
 
   /**
    * Constant for backwards compatibility.

@@ -124,13 +124,9 @@ public final class Polygon2D extends EdgeTree {
       }
     }
     if (ax == bx && bx == cx && ay == by && by == cy) {
-      // indexed "triangle" is a point:
-      if (Rectangle.containsPoint(ay, ax, minLat, maxLat, minLon, maxLon) == false) {
-        return Relation.CELL_OUTSIDE_QUERY;
-      }
-      // shortcut by checking contains
+      // indexed "triangle" is a point: shortcut by checking contains
       return contains(ay, ax) ? Relation.CELL_INSIDE_QUERY : Relation.CELL_OUTSIDE_QUERY;
-    } else if (ax == cx && ay == cy) {
+    } else if ((ax == cx && ay == cy) || (bx == cx && by == cy)) {
       // indexed "triangle" is a line segment: shortcut by calling appropriate method
       return relateIndexedLineSegment(ax, ay, bx, by);
     }
@@ -275,7 +271,9 @@ public final class Polygon2D extends EdgeTree {
     if (isOnEdge.get() == false && lat <= edge.max) {
       if (lat == edge.lat1 && lat == edge.lat2 ||
           (lat <= edge.lat1 && lat >= edge.lat2) != (lat >= edge.lat1 && lat <= edge.lat2)) {
-        if (GeoUtils.orient(edge.lon1, edge.lat1, edge.lon2, edge.lat2, lon, lat) == 0) {
+        if ((lon == edge.lon1 && lon == edge.lon2) ||
+            ((lon <= edge.lon1 && lon >= edge.lon2) != (lon >= edge.lon1 && lon <= edge.lon2) &&
+            GeoUtils.orient(edge.lon1, edge.lat1, edge.lon2, edge.lat2, lon, lat) == 0)) {
           // if its on the boundary return true
           isOnEdge.set(true);
           return true;
