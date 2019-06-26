@@ -630,7 +630,14 @@ public class ZkController implements Closeable {
     assert ObjectReleaseTracker.release(this);
   }
 
+  /**
+   * Best effort to give up the leadership of a shard in a core after hitting a tragic exception
+   * @param cd The current core descriptor
+   * @param tragicException The tragic exception from the {@code IndexWriter}
+   */
   public void giveupLeadership(CoreDescriptor cd, Throwable tragicException) {
+    assert tragicException != null;
+    assert cd != null;
     DocCollection dc = getClusterState().getCollectionOrNull(cd.getCollectionName());
     if (dc == null) return;
 
@@ -668,13 +675,12 @@ public class ZkController implements Closeable {
           props.put(ZkStateReader.REPLICA_TYPE, cd.getCloudDescriptor().getReplicaType().name().toUpperCase(Locale.ROOT));
           props.put(CoreAdminParams.NODE, getNodeName());
           getOverseerCollectionQueue().offer(Utils.toJSON(new ZkNodeProps(props)));
-        } catch (KeeperException e) {
-          log.info("Met exception on give up leadership for {}", key, e);
+        } catch (Exception e) {
+          // Exceptions are not bubbled up. giveupLeadership is best effort, and is only called in case of some other
+          // unrecoverable error happened
+          log.error("Met exception on give up leadership for {}", key, e);
           replicasMetTragicEvent.remove(key);
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          log.info("Met exception on give up leadership for {}", key, e);
-          replicasMetTragicEvent.remove(key);
+          SolrZkClient.checkInterrupted(e);
         }
       }
     }
@@ -2173,13 +2179,9 @@ public class ZkController implements Closeable {
   public void rejoinOverseerElection(String electionNode, boolean joinAtHead) {
     try {
       if (electionNode != null) {
-        //this call is from inside the JVM  . not from CoreAdminHandler
-        if (overseerElector.getContext() == null || overseerElector.getContext().leaderSeqPath == null) {
-          overseerElector.retryElection(new OverseerElectionContext(zkClient,
-              overseer, getNodeName()), joinAtHead);
-          return;
-        }
-        if (!overseerElector.getContext().leaderSeqPath.endsWith(electionNode)) {
+        // Check whether we came to this node by mistake
+        if ( overseerElector.getContext() != null && overseerElector.getContext().leaderSeqPath == null 
+            && !overseerElector.getContext().leaderSeqPath.endsWith(electionNode)) {
           log.warn("Asked to rejoin with wrong election node : {}, current node is {}", electionNode, overseerElector.getContext().leaderSeqPath);
           //however delete it . This is possible when the last attempt at deleting the election node failed.
           if (electionNode.startsWith(getNodeName())) {
@@ -2193,6 +2195,10 @@ public class ZkController implements Closeable {
               log.warn("Old election node exists , could not be removed ", e);
             }
           }
+        } else { // We're in the right place, now attempt to rejoin
+          overseerElector.retryElection(new OverseerElectionContext(zkClient,
+              overseer, getNodeName()), joinAtHead);
+          return;
         }
       } else {
         overseerElector.retryElection(overseerElector.getContext(), joinAtHead);
