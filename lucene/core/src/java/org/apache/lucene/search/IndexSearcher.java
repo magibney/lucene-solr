@@ -31,6 +31,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.RejectedExecutionException;
 
 import org.apache.lucene.document.Document;
 import org.apache.lucene.index.DirectoryReader;
@@ -41,7 +42,6 @@ import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.ReaderUtil;
 import org.apache.lucene.index.StoredFieldVisitor;
 import org.apache.lucene.index.Term;
-import org.apache.lucene.index.TermStates;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.search.similarities.BM25Similarity;
 import org.apache.lucene.search.similarities.Similarity;
@@ -88,6 +88,7 @@ import org.apache.lucene.util.ThreadInterruptedException;
  */
 public class IndexSearcher {
 
+  static int maxClauseCount = 1024;
   private static QueryCache DEFAULT_QUERY_CACHE;
   private static QueryCachingPolicy DEFAULT_CACHING_POLICY = new UsageTrackingQueryCachingPolicy();
   static {
@@ -115,6 +116,7 @@ public class IndexSearcher {
   // in the next release
   protected final IndexReaderContext readerContext;
   protected final List<LeafReaderContext> leafContexts;
+
   /** used with executor - each slice holds a set of leafs executed within one thread */
   private final LeafSlice[] leafSlices;
 
@@ -223,6 +225,24 @@ public class IndexSearcher {
    */
   public IndexSearcher(IndexReaderContext context) {
     this(context, null);
+  }
+
+  /** Return the maximum number of clauses permitted, 1024 by default.
+   * Attempts to add more than the permitted number of clauses cause {@link
+   * TooManyClauses} to be thrown.
+   * @see #setMaxClauseCount(int)
+   */
+  public static int getMaxClauseCount() { return maxClauseCount; }
+
+  /**
+   * Set the maximum number of clauses permitted per Query.
+   * Default value is 1024.
+   */
+  public static void setMaxClauseCount(int value)  {
+    if (value < 1) {
+      throw new IllegalArgumentException("maxClauseCount must be >= 1");
+    }
+    maxClauseCount = value;
   }
 
   /**
@@ -396,7 +416,7 @@ public class IndexSearcher {
       return count;
     }
 
-    // general case: create a collecor and count matches
+    // general case: create a collector and count matches
     final CollectorManager<TotalHitCountCollector, Integer> collectorManager = new CollectorManager<TotalHitCountCollector, Integer>() {
 
       @Override
@@ -433,8 +453,8 @@ public class IndexSearcher {
    * this method can be used for efficient 'deep-paging' across potentially
    * large result sets.
    *
-   * @throws BooleanQuery.TooManyClauses If a query would exceed 
-   *         {@link BooleanQuery#getMaxClauseCount()} clauses.
+   * @throws TooManyClauses If a query would exceed
+   *         {@link IndexSearcher#getMaxClauseCount()} clauses.
    */
   public TopDocs searchAfter(ScoreDoc after, Query query, int numHits) throws IOException {
     final int limit = Math.max(1, reader.maxDoc());
@@ -447,9 +467,14 @@ public class IndexSearcher {
 
     final CollectorManager<TopScoreDocCollector, TopDocs> manager = new CollectorManager<TopScoreDocCollector, TopDocs>() {
 
+      private final HitsThresholdChecker hitsThresholdChecker = (executor == null || leafSlices.length <= 1) ? HitsThresholdChecker.create(TOTAL_HITS_THRESHOLD) :
+          HitsThresholdChecker.createShared(TOTAL_HITS_THRESHOLD);
+
+      private final MaxScoreAccumulator minScoreAcc = (executor == null || leafSlices.length <= 1) ? null : new MaxScoreAccumulator();
+
       @Override
       public TopScoreDocCollector newCollector() throws IOException {
-        return TopScoreDocCollector.create(cappedNumHits, after, TOTAL_HITS_THRESHOLD);
+        return TopScoreDocCollector.create(cappedNumHits, after, hitsThresholdChecker, minScoreAcc);
       }
 
       @Override
@@ -459,7 +484,7 @@ public class IndexSearcher {
         for (TopScoreDocCollector collector : collectors) {
           topDocs[i++] = collector.topDocs();
         }
-        return TopDocs.merge(0, cappedNumHits, topDocs, true);
+        return TopDocs.merge(0, cappedNumHits, topDocs);
       }
 
     };
@@ -470,8 +495,8 @@ public class IndexSearcher {
   /** Finds the top <code>n</code>
    * hits for <code>query</code>.
    *
-   * @throws BooleanQuery.TooManyClauses If a query would exceed 
-   *         {@link BooleanQuery#getMaxClauseCount()} clauses.
+   * @throws TooManyClauses If a query would exceed
+   *         {@link IndexSearcher#getMaxClauseCount()} clauses.
    */
   public TopDocs search(Query query, int n)
     throws IOException {
@@ -482,8 +507,8 @@ public class IndexSearcher {
    *
    * <p>{@link LeafCollector#collect(int)} is called for every matching document.
    *
-   * @throws BooleanQuery.TooManyClauses If a query would exceed 
-   *         {@link BooleanQuery#getMaxClauseCount()} clauses.
+   * @throws TooManyClauses If a query would exceed
+   *         {@link IndexSearcher#getMaxClauseCount()} clauses.
    */
   public void search(Query query, Collector results)
     throws IOException {
@@ -502,8 +527,8 @@ public class IndexSearcher {
    * <code>true</code> then the maximum score over all
    * collected hits will be computed.
    * 
-   * @throws BooleanQuery.TooManyClauses If a query would exceed 
-   *         {@link BooleanQuery#getMaxClauseCount()} clauses.
+   * @throws TooManyClauses If a query would exceed
+   *         {@link IndexSearcher#getMaxClauseCount()} clauses.
    */
   public TopFieldDocs search(Query query, int n,
       Sort sort, boolean doDocScores) throws IOException {
@@ -530,8 +555,8 @@ public class IndexSearcher {
    * this method can be used for efficient 'deep-paging' across potentially
    * large result sets.
    *
-   * @throws BooleanQuery.TooManyClauses If a query would exceed 
-   *         {@link BooleanQuery#getMaxClauseCount()} clauses.
+   * @throws TooManyClauses If a query would exceed
+   *         {@link IndexSearcher#getMaxClauseCount()} clauses.
    */
   public TopDocs searchAfter(ScoreDoc after, Query query, int n, Sort sort) throws IOException {
     return searchAfter(after, query, n, sort, false);
@@ -550,8 +575,8 @@ public class IndexSearcher {
    * <code>true</code> then the maximum score over all
    * collected hits will be computed.
    *
-   * @throws BooleanQuery.TooManyClauses If a query would exceed 
-   *         {@link BooleanQuery#getMaxClauseCount()} clauses.
+   * @throws TooManyClauses If a query would exceed
+   *         {@link IndexSearcher#getMaxClauseCount()} clauses.
    */
   public TopFieldDocs searchAfter(ScoreDoc after, Query query, int numHits, Sort sort,
       boolean doDocScores) throws IOException {
@@ -573,12 +598,17 @@ public class IndexSearcher {
     final int cappedNumHits = Math.min(numHits, limit);
     final Sort rewrittenSort = sort.rewrite(this);
 
-    final CollectorManager<TopFieldCollector, TopFieldDocs> manager = new CollectorManager<TopFieldCollector, TopFieldDocs>() {
+    final CollectorManager<TopFieldCollector, TopFieldDocs> manager = new CollectorManager<>() {
+
+      private final HitsThresholdChecker hitsThresholdChecker = (executor == null || leafSlices.length <= 1) ? HitsThresholdChecker.create(TOTAL_HITS_THRESHOLD) :
+          HitsThresholdChecker.createShared(TOTAL_HITS_THRESHOLD);
+
+      private final MaxScoreAccumulator minScoreAcc = (executor == null || leafSlices.length <= 1) ? null : new MaxScoreAccumulator();
 
       @Override
       public TopFieldCollector newCollector() throws IOException {
         // TODO: don't pay the price for accurate hit counts by default
-        return TopFieldCollector.create(rewrittenSort, cappedNumHits, after, TOTAL_HITS_THRESHOLD);
+        return TopFieldCollector.create(rewrittenSort, cappedNumHits, after, hitsThresholdChecker, minScoreAcc);
       }
 
       @Override
@@ -588,7 +618,7 @@ public class IndexSearcher {
         for (TopFieldCollector collector : collectors) {
           topDocs[i++] = collector.topDocs();
         }
-        return TopDocs.merge(rewrittenSort, 0, cappedNumHits, topDocs, true);
+        return TopDocs.merge(rewrittenSort, 0, cappedNumHits, topDocs);
       }
 
     };
@@ -640,8 +670,20 @@ public class IndexSearcher {
           search(Arrays.asList(leaves), weight, collector);
           return collector;
         });
-        executor.execute(task);
-        topDocsFutures.add(task);
+        boolean executedOnCallerThread = false;
+        try {
+          executor.execute(task);
+        } catch (RejectedExecutionException e) {
+          // Execute on caller thread
+          search(Arrays.asList(leaves), weight, collector);
+          topDocsFutures.add(CompletableFuture.completedFuture(collector));
+          executedOnCallerThread = true;
+        }
+
+        // Do not add the task's future if it was not used
+        if (executedOnCallerThread == false) {
+          topDocsFutures.add(task);
+        }
       }
       final LeafReaderContext[] leaves = leafSlices[leafSlices.length - 1].leaves;
       final C collector = collectors.get(leafSlices.length - 1);
@@ -678,8 +720,8 @@ public class IndexSearcher {
    *          to match documents
    * @param collector
    *          to receive hits
-   * @throws BooleanQuery.TooManyClauses If a query would exceed 
-   *         {@link BooleanQuery#getMaxClauseCount()} clauses.
+   * @throws TooManyClauses If a query would exceed
+   *         {@link IndexSearcher#getMaxClauseCount()} clauses.
    */
   protected void search(List<LeafReaderContext> leaves, Weight weight, Collector collector)
       throws IOException {
@@ -709,8 +751,8 @@ public class IndexSearcher {
   }
 
   /** Expert: called to re-write queries into primitive queries.
-   * @throws BooleanQuery.TooManyClauses If a query would exceed 
-   *         {@link BooleanQuery#getMaxClauseCount()} clauses.
+   * @throws TooManyClauses If a query would exceed
+   *         {@link IndexSearcher#getMaxClauseCount()} clauses.
    */
   public Query rewrite(Query original) throws IOException {
     Query query = original;
@@ -718,7 +760,42 @@ public class IndexSearcher {
          rewrittenQuery = query.rewrite(reader)) {
       query = rewrittenQuery;
     }
+    query.visit(getNumClausesCheckVisitor());
     return query;
+  }
+
+  /** Returns a QueryVisitor which recursively checks the total
+   * number of clauses that a query and its children cumulatively
+   * have and validates that the total number does not exceed
+   * the specified limit
+   */
+  private static QueryVisitor getNumClausesCheckVisitor() {
+    return new QueryVisitor() {
+
+      int numClauses;
+
+      @Override
+      public QueryVisitor getSubVisitor(BooleanClause.Occur occur, Query parent) {
+        // Return this instance even for MUST_NOT and not an empty QueryVisitor
+        return this;
+      }
+
+      @Override
+      public void visitLeaf(Query query) {
+        if (numClauses > maxClauseCount) {
+          throw new TooManyClauses();
+        }
+        ++numClauses;
+      }
+
+      @Override
+      public void consumeTerms(Query query, Term... terms) {
+        if (numClauses > maxClauseCount) {
+          throw new TooManyClauses();
+        }
+        ++numClauses;
+      }
+    };
   }
 
   /** Returns an Explanation that describes how <code>doc</code> scored against
@@ -743,8 +820,8 @@ public class IndexSearcher {
    * Computing an explanation is as expensive as executing the query over the
    * entire index.
    * <p>Applications should call {@link IndexSearcher#explain(Query, int)}.
-   * @throws BooleanQuery.TooManyClauses If a query would exceed 
-   *         {@link BooleanQuery#getMaxClauseCount()} clauses.
+   * @throws TooManyClauses If a query would exceed
+   *         {@link IndexSearcher#getMaxClauseCount()} clauses.
    */
   protected Explanation explain(Weight weight, int doc) throws IOException {
     int n = ReaderUtil.subIndex(doc, leafContexts);
@@ -805,19 +882,20 @@ public class IndexSearcher {
   }
   
   /**
-   * Returns {@link TermStatistics} for a term, or {@code null} if
-   * the term does not exist.
+   * Returns {@link TermStatistics} for a term.
    * 
    * This can be overridden for example, to return a term's statistics
    * across a distributed collection.
+   *
+   * @param docFreq The document frequency of the term. It must be greater or equal to 1.
+   * @param totalTermFreq The total term frequency.
+   * @return A {@link TermStatistics} (never null).
+   *
    * @lucene.experimental
    */
-  public TermStatistics termStatistics(Term term, TermStates context) throws IOException {
-    if (context.docFreq() == 0) {
-      return null;
-    } else {
-      return new TermStatistics(term.bytes(), context.docFreq(), context.totalTermFreq());
-    }
+  public TermStatistics termStatistics(Term term, int docFreq, long totalTermFreq) throws IOException {
+    // This constructor will throw an exception if docFreq <= 0.
+    return new TermStatistics(term.bytes(), docFreq, totalTermFreq);
   }
   
   /**
@@ -853,5 +931,16 @@ public class IndexSearcher {
    */
   public Executor getExecutor() {
     return executor;
+  }
+
+  /** Thrown when an attempt is made to add more than {@link
+   * #getMaxClauseCount()} clauses. This typically happens if
+   * a PrefixQuery, FuzzyQuery, WildcardQuery, or TermRangeQuery
+   * is expanded to many terms during search.
+   */
+  public static class TooManyClauses extends RuntimeException {
+    public TooManyClauses() {
+      super("maxClauseCount is set to " + maxClauseCount);
+    }
   }
 }

@@ -40,6 +40,7 @@ import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.BoostQuery;
+import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.similarities.ClassicSimilarity;
@@ -220,7 +221,7 @@ public final class MoreLikeThis {
   /**
    * Return a Query with no more than this many terms.
    *
-   * @see BooleanQuery#getMaxClauseCount
+   * @see IndexSearcher#getMaxClauseCount
    * @see #getMaxQueryTerms
    * @see #setMaxQueryTerms
    */
@@ -635,7 +636,7 @@ public final class MoreLikeThis {
       try {
         query.add(tq, BooleanClause.Occur.SHOULD);
       }
-      catch (BooleanQuery.TooManyClauses ignore) {
+      catch (IndexSearcher.TooManyClauses ignore) {
         break;
       }
     }
@@ -649,12 +650,16 @@ public final class MoreLikeThis {
    */
   private PriorityQueue<ScoreTerm> createQueue(Map<String, Map<String, Int>> perFieldTermFrequencies) throws IOException {
     // have collected all words in doc and their freqs
-    int numDocs = ir.numDocs();
     final int limit = Math.min(maxQueryTerms, this.getTermsCount(perFieldTermFrequencies));
     FreqQ queue = new FreqQ(limit); // will order words by score
     for (Map.Entry<String, Map<String, Int>> entry : perFieldTermFrequencies.entrySet()) {
       Map<String, Int> perWordTermFrequencies = entry.getValue();
       String fieldName = entry.getKey();
+
+      long numDocs = ir.getDocCount(fieldName);
+      if(numDocs == -1) {
+        numDocs = ir.numDocs();
+      }
 
       for (Map.Entry<String, Int> tfEntry : perWordTermFrequencies.entrySet()) { // for every word
         String word = tfEntry.getKey();

@@ -31,6 +31,7 @@ import org.apache.lucene.index.PointValues.IntersectVisitor;
 import org.apache.lucene.index.PointValues.Relation;
 import org.apache.lucene.index.PointValues;
 import org.apache.lucene.mockfile.ExtrasFS;
+import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.store.CorruptingIndexOutput;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FilterDirectory;
@@ -43,6 +44,8 @@ import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.NumericUtils;
 import org.apache.lucene.util.TestUtil;
+
+import static com.carrotsearch.randomizedtesting.RandomizedTest.randomBoolean;
 
 public class TestBKD extends LuceneTestCase {
 
@@ -62,7 +65,7 @@ public class TestBKD extends LuceneTestCase {
 
       try (IndexInput in = dir.openInput("bkd", IOContext.DEFAULT)) {
         in.seek(indexFP);
-        BKDReader r = new BKDReader(in);
+        BKDReader r = new BKDReader(in, randomBoolean());
 
         // Simple 1D range query:
         final int queryMin = 42;
@@ -164,7 +167,7 @@ public class TestBKD extends LuceneTestCase {
 
       try (IndexInput in = dir.openInput("bkd", IOContext.DEFAULT)) {
         in.seek(indexFP);
-        BKDReader r = new BKDReader(in);
+        BKDReader r = new BKDReader(in, randomBoolean());
 
         byte[] minPackedValue = r.getMinPackedValue();
         byte[] maxPackedValue = r.getMaxPackedValue();
@@ -292,7 +295,7 @@ public class TestBKD extends LuceneTestCase {
 
       try (IndexInput in = dir.openInput("bkd", IOContext.DEFAULT)) {
         in.seek(indexFP);
-        BKDReader r = new BKDReader(in);
+        BKDReader r = new BKDReader(in, randomBoolean());
 
         int iters = atLeast(100);
         for(int iter=0;iter<iters;iter++) {
@@ -614,6 +617,29 @@ public class TestBKD extends LuceneTestCase {
     verify(docValues, null, numDataDims, numIndexDims, numBytesPerDim);
   }
 
+  // this should trigger low cardinality leaves
+  public void testRandomFewDifferentValues() throws Exception {
+    int numBytesPerDim = TestUtil.nextInt(random(), 2, 30);
+    int numIndexDims = TestUtil.nextInt(random(), 1, 8);
+    int numDataDims = TestUtil.nextInt(random(), numIndexDims, 8);
+
+    int numDocs = atLeast(10000);
+    int cardinality = TestUtil.nextInt(random(), 2, 100);
+    byte[][][] values = new byte[cardinality][numDataDims][numBytesPerDim];
+    for (int i = 0; i < cardinality; i++) {
+      for (int j = 0; j < numDataDims; j++) {
+        random().nextBytes(values[i][j]);
+      }
+    }
+
+    byte[][][] docValues = new byte[numDocs][][];
+    for(int docID = 0; docID < numDocs; docID++) {
+      docValues[docID] = values[random().nextInt(cardinality)];
+    }
+
+    verify(docValues, null, numDataDims, numIndexDims, numBytesPerDim);
+  }
+
   public void testMultiValued() throws Exception {
     int numBytesPerDim = TestUtil.nextInt(random(), 2, 30);
     int numDataDims = TestUtil.nextInt(random(), 1, 5);
@@ -761,7 +787,7 @@ public class TestBKD extends LuceneTestCase {
         List<BKDReader> readers = new ArrayList<>();
         for(long fp : toMerge) {
           in.seek(fp);
-          readers.add(new BKDReader(in));
+          readers.add(new BKDReader(in, randomBoolean()));
         }
         out = dir.createOutput("bkd2", IOContext.DEFAULT);
         indexFP = w.merge(out, docMaps, readers);
@@ -775,7 +801,7 @@ public class TestBKD extends LuceneTestCase {
       }
 
       in.seek(indexFP);
-      BKDReader r = new BKDReader(in);
+      BKDReader r = new BKDReader(in, randomBoolean());
 
       int iters = atLeast(100);
       for(int iter=0;iter<iters;iter++) {
@@ -821,7 +847,29 @@ public class TestBKD extends LuceneTestCase {
               hits.set(docID);
             }
 
-            @Override
+          @Override
+          public void visit(DocIdSetIterator iterator, byte[] packedValue) throws IOException {
+              if (random().nextBoolean()) {
+                // check the default method is correct
+                IntersectVisitor.super.visit(iterator, packedValue);
+              } else {
+                assertEquals(iterator.docID(), -1);
+                int cost = Math.toIntExact(iterator.cost());
+                int numberOfPoints = 0;
+                int docID;
+                while ((docID = iterator.nextDoc()) != DocIdSetIterator.NO_MORE_DOCS) {
+                  assertEquals(iterator.docID(), docID);
+                  visit(docID, packedValue);
+                  numberOfPoints++;
+                }
+                assertEquals(cost,  numberOfPoints);
+                assertEquals(iterator.docID(), DocIdSetIterator.NO_MORE_DOCS);
+                assertEquals(iterator.nextDoc(), DocIdSetIterator.NO_MORE_DOCS);
+                assertEquals(iterator.docID(), DocIdSetIterator.NO_MORE_DOCS);
+              }
+          }
+
+          @Override
             public Relation compare(byte[] minPacked, byte[] maxPacked) {
               boolean crosses = false;
               for(int dim=0;dim<numIndexDims;dim++) {
@@ -1027,7 +1075,7 @@ public class TestBKD extends LuceneTestCase {
 
       IndexInput in = dir.openInput("bkd", IOContext.DEFAULT);
       in.seek(fp);
-      BKDReader r = new BKDReader(in);
+      BKDReader r = new BKDReader(in, randomBoolean());
       r.intersect(new IntersectVisitor() {
           int lastDocID = -1;
 
@@ -1051,6 +1099,80 @@ public class TestBKD extends LuceneTestCase {
     }
   }
 
+  public void testCheckDataDimOptimalOrder() throws IOException {
+    Directory dir = newDirectory();
+    final int numValues = atLeast(5000);
+    final int maxPointsInLeafNode = TestUtil.nextInt(random(), 50, 500);
+    final int numBytesPerDim = TestUtil.nextInt(random(), 1, 4);
+    final double maxMB = (float) 3.0 + (3*random().nextDouble());
+
+    final int numIndexDims = TestUtil.nextInt(random(), 1, 8);
+    final int numDataDims =  TestUtil.nextInt(random(), numIndexDims, 8);
+
+    final byte[] pointValue1 = new byte[numDataDims * numBytesPerDim];
+    final byte[] pointValue2 = new byte[numDataDims * numBytesPerDim];
+    random().nextBytes(pointValue1);
+    random().nextBytes(pointValue2);
+    // equal index dimensions but different data dimensions
+    for (int i = 0; i < numIndexDims; i++) {
+        System.arraycopy(pointValue1, i * numBytesPerDim, pointValue2, i * numBytesPerDim, numBytesPerDim);
+    }
+
+    BKDWriter w = new BKDWriter(2 * numValues, dir, "_temp", numDataDims, numIndexDims, numBytesPerDim, maxPointsInLeafNode,
+        maxMB, 2 * numValues);
+    for (int i = 0; i < numValues; ++i) {
+      w.add(pointValue1, i);
+      w.add(pointValue2, i);
+    }
+    final long indexFP;
+    try (IndexOutput out = dir.createOutput("bkd", IOContext.DEFAULT)) {
+      indexFP = w.finish(out);
+      w.close();
+    }
+
+    IndexInput pointsIn = dir.openInput("bkd", IOContext.DEFAULT);
+    pointsIn.seek(indexFP);
+    BKDReader points = new BKDReader(pointsIn);
+
+    points.intersect(new IntersectVisitor() {
+
+      byte[] previous = null;
+      boolean hasChanged = false;
+
+      @Override
+      public void visit(int docID) {
+        throw new UnsupportedOperationException();
+      }
+
+      @Override
+      public void visit(int docID, byte[] packedValue) {
+        if (previous == null) {
+          previous = new byte[numDataDims * numBytesPerDim];
+          System.arraycopy(packedValue, 0, previous, 0, numDataDims * numBytesPerDim);
+        } else {
+          int mismatch = Arrays.mismatch(packedValue, previous);
+          if (mismatch != -1) {
+            if (hasChanged == false) {
+              hasChanged = true;
+              System.arraycopy(packedValue, 0, previous, 0, numDataDims * numBytesPerDim);
+            } else {
+              fail("Points are not in optimal order");
+            }
+          }
+        }
+      }
+
+      @Override
+      public Relation compare(byte[] minPackedValue, byte[] maxPackedValue) {
+        return Relation.CELL_CROSSES_QUERY;
+      }
+    });
+
+
+    pointsIn.close();
+    dir.close();
+  }
+
   public void test2DLongOrdsOffline() throws Exception {
     try (Directory dir = newDirectory()) {
       int numDocs = 100000;
@@ -1067,7 +1189,7 @@ public class TestBKD extends LuceneTestCase {
 
       IndexInput in = dir.openInput("bkd", IOContext.DEFAULT);
       in.seek(fp);
-      BKDReader r = new BKDReader(in);
+      BKDReader r = new BKDReader(in, randomBoolean());
       int[] count = new int[1];
       r.intersect(new IntersectVisitor() {
 
@@ -1122,7 +1244,7 @@ public class TestBKD extends LuceneTestCase {
 
     IndexInput in = dir.openInput("bkd", IOContext.DEFAULT);
     in.seek(fp);
-    BKDReader r = new BKDReader(in);
+    BKDReader r = new BKDReader(in, randomBoolean());
     int[] count = new int[1];
     r.intersect(new IntersectVisitor() {
 

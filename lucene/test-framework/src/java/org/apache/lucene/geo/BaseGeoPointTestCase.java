@@ -414,6 +414,29 @@ public abstract class BaseGeoPointTestCase extends LuceneTestCase {
     verify(lats, lons);
   }
 
+  // A particularly tricky adversary for BKD tree:
+  public void testLowCardinality() throws Exception {
+    int numPoints = atLeast(1000);
+    int cardinality = TestUtil.nextInt(random(), 2, 20);
+
+    double[] diffLons  = new double[cardinality];
+    double[] diffLats = new double[cardinality];
+    for (int i = 0; i< cardinality; i++) {
+      diffLats[i] = nextLatitude();
+      diffLons[i] = nextLongitude();
+    }
+
+    double[] lats = new double[numPoints];
+    double[] lons = new double[numPoints];
+    for (int i = 0; i < numPoints; i++) {
+      int index = random().nextInt(cardinality);
+      lats[i] = diffLats[index];
+      lons[i] = diffLons[index];
+    }
+
+    verify(lats, lons);
+  }
+
   public void testAllLatEqual() throws Exception {
     int numPoints = atLeast(10000);
     double lat = nextLatitude();
@@ -1252,7 +1275,7 @@ public abstract class BaseGeoPointTestCase extends LuceneTestCase {
     // Else seeds may not reproduce:
     iwc.setMergeScheduler(new SerialMergeScheduler());
     int pointsInLeaf = 2 + random().nextInt(4);
-    iwc.setCodec(new FilterCodec("Lucene80", TestUtil.getDefaultCodec()) {
+    iwc.setCodec(new FilterCodec("Lucene84", TestUtil.getDefaultCodec()) {
       @Override
       public PointsFormat pointsFormat() {
         return new PointsFormat() {
