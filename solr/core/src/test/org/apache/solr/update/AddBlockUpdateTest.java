@@ -153,9 +153,10 @@ public class AddBlockUpdateTest extends SolrTestCaseJ4 {
 
   @AfterClass
   public static void afterClass() throws Exception {
-    exe.shutdownNow();
-
-    exe = null;
+    if (null != exe) {
+      exe.shutdownNow();
+      exe = null;
+    }
     inputFactory = null;
   }
 
@@ -905,12 +906,7 @@ public class AddBlockUpdateTest extends SolrTestCaseJ4 {
   }
 
   private void assertFailedBlockU(final String msg) {
-    try {
-      assertBlockU(msg, "1");
-      fail("expecting fail");
-    } catch (Exception e) {
-      // gotcha
-    }
+    expectThrows(Exception.class, () -> assertBlockU(msg, "1"));
   }
 
   private void assertBlockU(final String msg, String expected) {
@@ -935,4 +931,3 @@ public class AddBlockUpdateTest extends SolrTestCaseJ4 {
     }
   }
 }
-

@@ -76,13 +76,15 @@ public class CategoryRoutedAliasUpdateProcessorTest extends RoutedAliasUpdatePro
 
   @After
   public void doAfter() throws Exception {
-    solrClient.close();
-    shutdownCluster();
+    IOUtils.close(solrClient);
+    if (null != cluster) {
+      shutdownCluster();
+    }
   }
 
   @AfterClass
-  public static void finish() throws Exception {
-    IOUtils.close(solrClient);
+  public static void cleanUpAfterClass() throws Exception {
+    solrClient = null;
   }
 
   public void testNonEnglish() throws Exception {
@@ -191,6 +193,11 @@ public class CategoryRoutedAliasUpdateProcessorTest extends RoutedAliasUpdatePro
     //assertDocRoutedToCol(lastDocId, col23rd);
 
     String uninitialized = getAlias() + "__CRA__" + CategoryRoutedAlias.UNINITIALIZED;
+
+    // important to test that we don't try to delete the temp collection on the first document. If we did so
+    // we would be at risk of out of order execution of the deletion/creation which would leave a window
+    // of time where there were no collections in the alias. That would likely break all manner of other
+    // parts of solr.
     assertInvariants(colVogon, uninitialized);
 
     addDocsAndCommit(true,
@@ -199,6 +206,7 @@ public class CategoryRoutedAliasUpdateProcessorTest extends RoutedAliasUpdatePro
         newDoc(SHIPS[3]),
         newDoc(SHIPS[4]));
 
+    // NOW the temp collection should be gone!
     assertInvariants(colVogon, colHoG, colStunt, colArk, colBistro);
 
     // make sure we fail if we have no value to route on.

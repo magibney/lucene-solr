@@ -22,7 +22,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -101,13 +100,6 @@ public class IndexSearcher {
    * don't spend most time on computing hit counts
    */
   private static final int TOTAL_HITS_THRESHOLD = 1000;
-
-  /**
-   * Thresholds for index slice allocation logic. To change the default, extend
-   * <code> IndexSearcher</code> and use custom values
-   */
-  private static final int MAX_DOCS_PER_SLICE = 250_000;
-  private static final int MAX_SEGMENTS_PER_SLICE = 5;
 
   final IndexReader reader; // package private for testing!
   
@@ -273,60 +265,17 @@ public class IndexSearcher {
 
   /**
    * Expert: Creates an array of leaf slices each holding a subset of the given leaves.
-   * Each {@link LeafSlice} is executed in a single thread. By default, segments with more than
-   * MAX_DOCS_PER_SLICE will get their own thread
+   * Each {@link LeafSlice} is executed in a single thread. By default there
+   * will be one {@link LeafSlice} per leaf ({@link org.apache.lucene.index.LeafReaderContext}).
    */
   protected LeafSlice[] slices(List<LeafReaderContext> leaves) {
-    return slices(leaves, MAX_DOCS_PER_SLICE, MAX_SEGMENTS_PER_SLICE);
-  }
-
-  /**
-   * Static method to segregate LeafReaderContexts amongst multiple slices
-   */
-  public static LeafSlice[] slices (List<LeafReaderContext> leaves, int maxDocsPerSlice,
-                                    int maxSegmentsPerSlice) {
-    // Make a copy so we can sort:
-    List<LeafReaderContext> sortedLeaves = new ArrayList<>(leaves);
-
-    // Sort by maxDoc, descending:
-    Collections.sort(sortedLeaves,
-        Collections.reverseOrder(Comparator.comparingInt(l -> l.reader().maxDoc())));
-
-    final List<List<LeafReaderContext>> groupedLeaves = new ArrayList<>();
-    long docSum = 0;
-    List<LeafReaderContext> group = null;
-    for (LeafReaderContext ctx : sortedLeaves) {
-      if (ctx.reader().maxDoc() > maxDocsPerSlice) {
-        assert group == null;
-        groupedLeaves.add(Collections.singletonList(ctx));
-      } else {
-        if (group == null) {
-          group = new ArrayList<>();
-          group.add(ctx);
-
-          groupedLeaves.add(group);
-        } else {
-          group.add(ctx);
-        }
-
-        docSum += ctx.reader().maxDoc();
-        if (group.size() >= maxSegmentsPerSlice || docSum > maxDocsPerSlice) {
-          group = null;
-          docSum = 0;
-        }
-      }
+    LeafSlice[] slices = new LeafSlice[leaves.size()];
+    for (int i = 0; i < slices.length; i++) {
+      slices[i] = new LeafSlice(leaves.get(i));
     }
-
-    LeafSlice[] slices = new LeafSlice[groupedLeaves.size()];
-    int upto = 0;
-    for (List<LeafReaderContext> currentLeaf : groupedLeaves) {
-      slices[upto] = new LeafSlice(currentLeaf);
-      ++upto;
-    }
-
     return slices;
   }
-
+  
   /** Return the {@link IndexReader} this searches. */
   public IndexReader getIndexReader() {
     return reader;
@@ -396,7 +345,7 @@ public class IndexSearcher {
       return count;
     }
 
-    // general case: create a collecor and count matches
+    // general case: create a collector and count matches
     final CollectorManager<TotalHitCountCollector, Integer> collectorManager = new CollectorManager<TotalHitCountCollector, Integer>() {
 
       @Override
@@ -447,9 +396,14 @@ public class IndexSearcher {
 
     final CollectorManager<TopScoreDocCollector, TopDocs> manager = new CollectorManager<TopScoreDocCollector, TopDocs>() {
 
+      private final HitsThresholdChecker hitsThresholdChecker = (executor == null || leafSlices.length <= 1) ? HitsThresholdChecker.create(TOTAL_HITS_THRESHOLD) :
+          HitsThresholdChecker.createShared(TOTAL_HITS_THRESHOLD);
+
+      private final MaxScoreAccumulator minScoreAcc = (executor == null || leafSlices.length <= 1) ? null : new MaxScoreAccumulator();
+
       @Override
       public TopScoreDocCollector newCollector() throws IOException {
-        return TopScoreDocCollector.create(cappedNumHits, after, TOTAL_HITS_THRESHOLD);
+        return TopScoreDocCollector.create(cappedNumHits, after, hitsThresholdChecker, minScoreAcc);
       }
 
       @Override
@@ -575,10 +529,15 @@ public class IndexSearcher {
 
     final CollectorManager<TopFieldCollector, TopFieldDocs> manager = new CollectorManager<TopFieldCollector, TopFieldDocs>() {
 
+      private final HitsThresholdChecker hitsThresholdChecker = (executor == null || leafSlices.length <= 1) ? HitsThresholdChecker.create(TOTAL_HITS_THRESHOLD) :
+          HitsThresholdChecker.createShared(TOTAL_HITS_THRESHOLD);
+
+      private final MaxScoreAccumulator minScoreAcc = (executor == null || leafSlices.length <= 1) ? null : new MaxScoreAccumulator();
+
       @Override
       public TopFieldCollector newCollector() throws IOException {
         // TODO: don't pay the price for accurate hit counts by default
-        return TopFieldCollector.create(rewrittenSort, cappedNumHits, after, TOTAL_HITS_THRESHOLD);
+        return TopFieldCollector.create(rewrittenSort, cappedNumHits, after, hitsThresholdChecker, minScoreAcc);
       }
 
       @Override
@@ -793,9 +752,8 @@ public class IndexSearcher {
      *  @lucene.experimental */
     public final LeafReaderContext[] leaves;
     
-    public LeafSlice(List<LeafReaderContext> leavesList) {
-      Collections.sort(leavesList, Comparator.comparingInt(l -> l.docBase));
-      this.leaves = leavesList.toArray(new LeafReaderContext[0]);
+    public LeafSlice(LeafReaderContext... leaves) {
+      this.leaves = leaves;
     }
   }
 
@@ -803,21 +761,35 @@ public class IndexSearcher {
   public String toString() {
     return "IndexSearcher(" + reader + "; executor=" + executor + ")";
   }
-  
+
   /**
    * Returns {@link TermStatistics} for a term, or {@code null} if
    * the term does not exist.
-   * 
-   * This can be overridden for example, to return a term's statistics
-   * across a distributed collection.
-   * @lucene.experimental
+   * @deprecated in favor of {@link #termStatistics(Term, int, long)}.
    */
-  public TermStatistics termStatistics(Term term, TermStates context) throws IOException {
+  @Deprecated
+  public final TermStatistics termStatistics(Term term, TermStates context) throws IOException {
     if (context.docFreq() == 0) {
       return null;
     } else {
-      return new TermStatistics(term.bytes(), context.docFreq(), context.totalTermFreq());
+      return termStatistics(term, context.docFreq(), context.totalTermFreq());
     }
+  }
+
+  /**
+   * Returns {@link TermStatistics} for a term.
+   * <p>
+   * This can be overridden for example, to return a term's statistics
+   * across a distributed collection.
+   *
+   * @param docFreq       The document frequency of the term. It must be greater or equal to 1.
+   * @param totalTermFreq The total term frequency.
+   * @return A {@link TermStatistics} (never null).
+   * @lucene.experimental
+   */
+  public TermStatistics termStatistics(Term term, int docFreq, long totalTermFreq) throws IOException {
+    // This constructor will throw an exception if docFreq <= 0.
+    return new TermStatistics(term.bytes(), docFreq, totalTermFreq);
   }
   
   /**

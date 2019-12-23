@@ -898,13 +898,8 @@ public class TestPolicy extends SolrTestCaseJ4 {
   }
 
   private static void expectError(String name, Object val, String msg) {
-    try {
-      Clause.validate(name, val, true);
-      fail("expected exception containing " + msg);
-    } catch (Exception e) {
-      assertTrue("expected exception containing " + msg, e.getMessage().contains(msg));
-    }
-
+    Exception e = expectThrows(Exception.class, () -> Clause.validate(name, val, true));
+    assertTrue("expected exception containing " + msg, e.getMessage().contains(msg));
   }
 
   public void testOperands() {
@@ -1085,35 +1080,24 @@ public class TestPolicy extends SolrTestCaseJ4 {
     }
     config = new AutoScalingConfig(policies);
     policy = config.getPolicy();
-    session = policy.createSession(provider);
-    suggester = session.getSuggester(MOVEREPLICA)
-        .hint(Hint.SRC_NODE, "node1");
-
-    operation = suggester.getSuggestion();
-    assertNotNull(operation);
-    assertEquals("node2", operation.getParams().get("targetNode"));
-    assertEquals("r3", operation.getParams().get("replica"));
-
-    session = suggester.getSession();
-    suggester = session.getSuggester(MOVEREPLICA)
-        .hint(Hint.SRC_NODE, "node1");
-    operation = suggester.getSuggestion();
-    assertNotNull(operation);
-    assertEquals("node2", operation.getParams().get("targetNode"));
-    assertEquals("r5", operation.getParams().get("replica"));
-
-    session = suggester.getSession();
-    suggester = session.getSuggester(MOVEREPLICA)
-        .hint(Hint.SRC_NODE, "node1");
-    operation = suggester.getSuggestion();
-    assertEquals("node2", operation.getParams().get("targetNode"));
-    assertEquals("r1", operation.getParams().get("replica"));
-
-    session = suggester.getSession();
-    suggester = session.getSuggester(MOVEREPLICA)
-        .hint(Hint.SRC_NODE, "node1");
-    operation = suggester.getSuggestion();
-    assertNull(operation);
+    session = null;
+    for (String expectedReplica : new String[] { "r1", "r3", "r5", null }) {
+      if (session == null) {
+        session = policy.createSession(provider);
+      } else {
+        session = suggester.getSession();
+      }
+      suggester = session.getSuggester(MOVEREPLICA)
+          .hint(Hint.SRC_NODE, "node1");
+      operation = suggester.getSuggestion();
+      if (expectedReplica == null) {
+        assertNull(operation);
+      } else {
+        assertNotNull(operation);
+        assertEquals("node2", operation.getParams().get("targetNode"));
+        assertEquals(expectedReplica, operation.getParams().get("replica"));
+      }
+    }
 
     // now lets change the policy such that a node can have 2 shard2 replicas
     policies = (Map) Utils.fromJSONString("{" +
@@ -1143,29 +1127,23 @@ public class TestPolicy extends SolrTestCaseJ4 {
     }
     config = new AutoScalingConfig(policies);
     policy = config.getPolicy();
-    session = policy.createSession(provider);
-    suggester = session.getSuggester(MOVEREPLICA)
-        .hint(Hint.SRC_NODE, "node1");
 
-    operation = suggester.getSuggestion();
-    assertNotNull(operation);
-    assertEquals("node2", operation.getParams().get("targetNode"));
-    assertEquals("r3", operation.getParams().get("replica"));
-
-    session = suggester.getSession();
-    suggester = session.getSuggester(MOVEREPLICA)
-        .hint(Hint.SRC_NODE, "node1");
-    operation = suggester.getSuggestion();
-    assertNotNull(operation);
-    assertEquals("node2", operation.getParams().get("targetNode"));
-    assertEquals("r5", operation.getParams().get("replica"));
-
-    session = suggester.getSession();
-    suggester = session.getSuggester(MOVEREPLICA)
-        .hint(Hint.SRC_NODE, "node1");
-    operation = suggester.getSuggestion();
-    assertEquals("node3", operation.getParams().get("targetNode"));
-    assertEquals("r1", operation.getParams().get("replica"));
+    session = null;
+    final String[] expectedReplica = new String[] { "r1", "r3", "r5" };
+    final String[] expectedTargetNode = new String[] { "node3", "node3", "node2" };
+    for (int ii = 0; ii < expectedReplica.length; ++ii) {
+      if (session == null) {
+        session = policy.createSession(provider);
+      } else {
+        session = suggester.getSession();
+      }
+      suggester = session.getSuggester(MOVEREPLICA)
+          .hint(Hint.SRC_NODE, "node1");
+      operation = suggester.getSuggestion();
+      assertNotNull(operation);
+      assertEquals(expectedTargetNode[ii], operation.getParams().get("targetNode"));
+      assertEquals(expectedReplica[ii], operation.getParams().get("replica"));
+    }
   }
 
   private static SolrCloudManager cloudManagerWithData(String data) {
@@ -1865,7 +1843,7 @@ public class TestPolicy extends SolrTestCaseJ4 {
         "            'freedisk':918005641216}," +
         "      '127.0.0.1:60089_solr':{" +
         "        'cores':2," +
-        "            'freedisk':918005641216}}}");
+        "            'freedisk':918005641216}}");
 
     Policy policy = new Policy((Map<String, Object>) Utils.fromJSONString(autoscaleJson));
     Policy.Session session = policy.createSession(new DelegatingCloudManager(null) {
@@ -2271,7 +2249,11 @@ public class TestPolicy extends SolrTestCaseJ4 {
     assertEquals("/c/mycoll1", l.get(0)._get( "operation/path",null));
     assertNotNull(l.get(0)._get("operation/command/move-replica", null));
     assertEquals("10.0.0.6:7574_solr", l.get(0)._get( "operation/command/move-replica/targetNode",null));
-    assertEquals("core_node2", l.get(0)._get("operation/command/move-replica/replica", null));
+    /*
+     * one of the two cores on 10.0.0.6:8983_solr should move to 10.0.0.6:7574_solr and
+     * (everything else being equal) core_node1 is chosen ahead of core_node2 based on its name
+     */
+    assertEquals("core_node1", l.get(0)._get("operation/command/move-replica/replica", null));
   }
 
 
@@ -2612,13 +2594,13 @@ public class TestPolicy extends SolrTestCaseJ4 {
             if (node.equals("node1")) {
               Map m = Utils.makeMap("newColl",
                   Utils.makeMap("shard1", Collections.singletonList(new ReplicaInfo("r1", "shard1",
-                      new Replica("r1", Utils.makeMap(ZkStateReader.NODE_NAME_PROP, "node1")),
+                      new Replica("r1", Utils.makeMap(ZkStateReader.NODE_NAME_PROP, "node1"), "newColl", "shard1"),
                       Utils.makeMap(FREEDISK.perReplicaValue, 200)))));
               return m;
             } else if (node.equals("node2")) {
               Map m = Utils.makeMap("newColl",
                   Utils.makeMap("shard2", Collections.singletonList(new ReplicaInfo("r1", "shard2",
-                      new Replica("r1", Utils.makeMap(ZkStateReader.NODE_NAME_PROP, "node2")),
+                      new Replica("r1", Utils.makeMap(ZkStateReader.NODE_NAME_PROP, "node2"),"newColl", "shard2"),
                       Utils.makeMap(FREEDISK.perReplicaValue, 200)))));
               return m;
             }
@@ -2641,9 +2623,9 @@ public class TestPolicy extends SolrTestCaseJ4 {
               @Override
               public Replica getLeader(String sliceName) {
                 if (sliceName.equals("shard1"))
-                  return new Replica("r1", Utils.makeMap(ZkStateReader.NODE_NAME_PROP, "node1"));
+                  return new Replica("r1", Utils.makeMap(ZkStateReader.NODE_NAME_PROP, "node1"), name, "shard1");
                 if (sliceName.equals("shard2"))
-                  return new Replica("r2", Utils.makeMap(ZkStateReader.NODE_NAME_PROP, "node2"));
+                  return new Replica("r2", Utils.makeMap(ZkStateReader.NODE_NAME_PROP, "node2"),name, "shard2");
                 return null;
               }
             };
@@ -2660,20 +2642,20 @@ public class TestPolicy extends SolrTestCaseJ4 {
   public void testMoveReplicaLeaderlast() {
 
     List<Pair<ReplicaInfo, Row>> validReplicas = new ArrayList<>();
-    Replica replica = new Replica("r1", Utils.makeMap("leader", "true"));
-    ReplicaInfo replicaInfo = new ReplicaInfo("c1", "s1", replica, new HashMap<>());
+    Replica replica = new Replica("r1", Utils.makeMap("leader", "true"), "c1", "s1");
+    ReplicaInfo replicaInfo = new ReplicaInfo(replica.collection, replica.slice ,replica, new HashMap<>());
     validReplicas.add(new Pair<>(replicaInfo, null));
 
     replicaInfo = new ReplicaInfo("r4", "c1_s2_r1", "c1", "s2", Replica.Type.NRT, "n1", Collections.singletonMap("leader", "true"));
     validReplicas.add(new Pair<>(replicaInfo, null));
 
 
-    replica = new Replica("r2", Utils.makeMap("leader", false));
-    replicaInfo = new ReplicaInfo("c1", "s1", replica, new HashMap<>());
+    replica = new Replica("r2", Utils.makeMap("leader", false),"c1","s1");
+    replicaInfo = new ReplicaInfo(replica.collection, replica.slice, replica, new HashMap<>());
     validReplicas.add(new Pair<>(replicaInfo, null));
 
-    replica = new Replica("r3", Utils.makeMap("leader", false));
-    replicaInfo = new ReplicaInfo("c1", "s1", replica, new HashMap<>());
+    replica = new Replica("r3", Utils.makeMap("leader", false),"c1","s1");
+    replicaInfo = new ReplicaInfo(replica.collection,replica.slice, replica, new HashMap<>());
     validReplicas.add(new Pair<>(replicaInfo, null));
 
 
@@ -2798,11 +2780,15 @@ public class TestPolicy extends SolrTestCaseJ4 {
     StringWriter writer = new StringWriter();
     NamedList<Object> val = new NamedList<>();
     val.add("violations", violations);
-    new SolrJSONWriter(writer)
-        .writeObj(val)
-        .close();
-    JSONWriter.write(writer, true, JsonTextWriter.JSON_NL_MAP, val);
-
+    
+    if (random().nextBoolean()) {
+      new SolrJSONWriter(writer)
+          .writeObj(val)
+          .close();
+    } else {
+      JSONWriter.write(writer, true, JsonTextWriter.JSON_NL_MAP, val);
+    }
+    
     Object root = Utils.fromJSONString(writer.toString());
     assertEquals(2l,
         Utils.getObjectByPath(root, true, "violations[0]/violation/replica/NRT"));
@@ -2936,6 +2922,74 @@ public class TestPolicy extends SolrTestCaseJ4 {
     ReplicaPosition replicaPosition = replicaPositions.get(0);
     assertEquals("node3:8985", replicaPosition.node); // only node3:8985 has enough space to handle the new replica
     assertEquals("s1", replicaPosition.shard); // sanity check
+  }
+
+  public void testPolicyForEmptyCollection() throws IOException, InterruptedException {
+    Map m = (Map) loadFromResource("testEmptyCollection.json");
+    Map clusterStateMap = (Map) m.remove("clusterstate");
+    Map replicaInfoMap = (Map) m.remove("replicaInfo");
+
+    ClusterState clusterState = ClusterState.load(1, clusterStateMap, ImmutableSet.of("node1", "node2"), CLUSTER_STATE);
+
+    List<String> shards = Arrays.asList("shard1", "shard2", "shard3");
+
+    Assign.AssignRequest assignRequest = new Assign.AssignRequestBuilder()
+        .forCollection("test_empty_collection")
+        .forShard(shards)
+        .assignNrtReplicas(1)
+        .build();
+
+    DelegatingCloudManager cloudManager = new DelegatingCloudManager(null) {
+      @Override
+      public ClusterStateProvider getClusterStateProvider() {
+        return new DelegatingClusterStateProvider(null) {
+          @Override
+          public ClusterState getClusterState() {
+            return clusterState;
+          }
+
+          @Override
+          public Set<String> getLiveNodes() {
+            return clusterState.getLiveNodes();
+          }
+        };
+      }
+
+      @Override
+      public DistribStateManager getDistribStateManager() {
+        return new DelegatingDistribStateManager(null) {
+          @Override
+          public AutoScalingConfig getAutoScalingConfig() {
+            return new AutoScalingConfig(new HashMap<>());
+          }
+        };
+      }
+
+      public NodeStateProvider getNodeStateProvider() {
+        return new DelegatingNodeStateProvider(null) {
+          @Override
+          public Map<String, Object> getNodeValues(String node, Collection<String> keys) {
+            return Collections.EMPTY_MAP;
+          }
+
+          @Override
+          public Map<String, Map<String, List<ReplicaInfo>>> getReplicaInfo(String node, Collection<String> keys) {
+            //return Collections.EMPTY_MAP;
+            return replicaInfoMap;
+          }
+        };
+      }
+
+    };
+
+    Assign.AssignStrategyFactory assignStrategyFactory = new Assign.AssignStrategyFactory(cloudManager);
+    ClusterState state = cloudManager.getClusterStateProvider().getClusterState();
+    DocCollection collection = state.getCollection("test_empty_collection");
+
+    Assign.AssignStrategy assignStrategy = assignStrategyFactory.create(state, collection);
+    List<ReplicaPosition> replicaPositions = assignStrategy.assign(cloudManager, assignRequest);
+    assertEquals(2,replicaPositions.stream().map((rp)-> rp.node).distinct().count());
+    assertEquals(3,replicaPositions.stream().map((rp)-> rp.shard).distinct().count());
   }
 
   /**

@@ -32,6 +32,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeoutException;
 
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.lucene.util.LuceneTestCase.Slow;
 import org.apache.lucene.util.TestUtil;
@@ -46,6 +49,7 @@ import org.apache.solr.client.solrj.request.UpdateRequest;
 import org.apache.solr.client.solrj.response.QueryResponse;
 import org.apache.solr.client.solrj.response.RequestStatusState;
 import org.apache.solr.client.solrj.response.UpdateResponse;
+import org.apache.solr.client.solrj.response.SolrPingResponse;
 import org.apache.solr.cloud.AbstractDistribZkTestBase;
 import org.apache.solr.cloud.SolrCloudTestCase;
 import org.apache.solr.common.SolrDocument;
@@ -68,16 +72,13 @@ import org.apache.solr.handler.admin.CollectionsHandler;
 import org.apache.solr.handler.admin.ConfigSetsHandler;
 import org.apache.solr.handler.admin.CoreAdminHandler;
 import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
 
 
 /**
@@ -122,6 +123,11 @@ public class CloudSolrClientTest extends SolrCloudTestCase {
     
     shutdownCluster();
     super.tearDown();
+  }
+
+  @AfterClass
+  public static void cleanUpAfterClass() throws Exception {
+    httpBasedCloudSolrClient = null;
   }
 
   /**
@@ -667,10 +673,8 @@ public class CloudSolrClientTest extends SolrCloudTestCase {
   public void testShutdown() throws IOException {
     try (CloudSolrClient client = getCloudSolrClient("[ff01::114]:33332")) {
       client.setZkConnectTimeout(100);
-      client.connect();
-      fail("Expected exception");
-    } catch (SolrException e) {
-      assertTrue(e.getCause() instanceof TimeoutException);
+      SolrException ex = expectThrows(SolrException.class, client::connect);
+      assertTrue(ex.getCause() instanceof TimeoutException);
     }
   }
 
@@ -679,14 +683,10 @@ public class CloudSolrClientTest extends SolrCloudTestCase {
 
   @Test
   public void testWrongZkChrootTest() throws IOException {
-
-    exception.expect(SolrException.class);
-    exception.expectMessage("cluster not found/not ready");
-
     try (CloudSolrClient client = getCloudSolrClient(cluster.getZkServer().getZkAddress() + "/xyz/foo")) {
       client.setZkClientTimeout(1000 * 60);
-      client.connect();
-      fail("Expected exception");
+      SolrException ex = expectThrows(SolrException.class, client::connect);
+      assertTrue(ex.getMessage().contains("cluster not found/not ready"));
     }
   }
 
@@ -765,16 +765,8 @@ public class CloudSolrClientTest extends SolrCloudTestCase {
   public void testCollectionDoesntExist() throws Exception {
     CloudSolrClient client = getRandomClient();
     SolrInputDocument doc = new SolrInputDocument("id", "1", "title_s", "my doc");
-    try {
-      client.add("boguscollectionname", doc);
-      fail();
-    } catch (SolrException ex) {
-      if (ex.getMessage().equals("Collection not found: boguscollectionname")) {
-        // pass
-      } else {
-        throw ex;
-      }
-    }
+    SolrException ex = expectThrows(SolrException.class, () -> client.add("boguscollectionname", doc));
+    assertEquals("Collection not found: boguscollectionname", ex.getMessage());
   }
 
   public void testRetryUpdatesWhenClusterStateIsStale() throws Exception {
@@ -964,6 +956,18 @@ public class CloudSolrClientTest extends SolrCloudTestCase {
     }
     assertTrue("No responses", shardAddresses.size() > 0);
     log.info("Shards giving the response: " + Arrays.toString(shardAddresses.toArray()));
+  }
+
+  @Test
+  public void testPing() throws Exception {
+    final String testCollection = "ping_test";
+    CollectionAdminRequest.createCollection(testCollection, "conf", 2, 1).process(cluster.getSolrClient());
+    cluster.waitForActiveCollection(testCollection, 2, 2);
+    final SolrClient clientUnderTest = getRandomClient();
+
+    final SolrPingResponse response = clientUnderTest.ping(testCollection);
+
+    assertEquals("This should be OK", 0, response.getStatus());
   }
 
 }

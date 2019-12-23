@@ -16,25 +16,34 @@
  */
 package org.apache.solr.velocity;
 
+import java.io.IOException;
+import java.io.StringWriter;
+
 import org.apache.solr.SolrTestCaseJ4;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.util.NamedList;
+import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.response.QueryResponseWriter;
 import org.apache.solr.response.SolrParamResourceLoader;
 import org.apache.solr.response.SolrQueryResponse;
 import org.apache.solr.response.VelocityResponseWriter;
-import org.apache.solr.request.SolrQueryRequest;
+import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
-
-import java.io.IOException;
-import java.io.StringWriter;
 
 public class VelocityResponseWriterTest extends SolrTestCaseJ4 {
   @BeforeClass
   public static void beforeClass() throws Exception {
+    System.setProperty("velocity.resourceloader.params.enabled", "true");
+    System.setProperty("velocity.resourceloader.solr.enabled", "true");
     initCore("solrconfig.xml", "schema.xml", getFile("velocity/solr").getAbsolutePath());
     System.out.println(getFile("velocity/solr").getAbsolutePath());
+  }
+
+  @AfterClass
+  public static void afterClass() throws Exception {
+    System.clearProperty("velocity.resourceloader.params.enabled");
+    System.clearProperty("velocity.resourceloader.solr.enabled");
   }
 
   @Test
@@ -66,12 +75,7 @@ public class VelocityResponseWriterTest extends SolrTestCaseJ4 {
         SolrParamResourceLoader.TEMPLATE_PARAM_PREFIX+"custom","$response.response.response_data");
     SolrQueryResponse rsp = new SolrQueryResponse();
     StringWriter buf = new StringWriter();
-    try {
-      vrw.write(buf, req, rsp);
-      fail("Should have thrown exception due to missing template");
-    } catch (IOException e) {
-      // expected exception
-    }
+    expectThrows(IOException.class, () -> vrw.write(buf, req, rsp));
   }
 
   @Test

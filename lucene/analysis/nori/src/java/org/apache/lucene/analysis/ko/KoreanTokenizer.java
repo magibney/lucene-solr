@@ -681,11 +681,11 @@ public final class KoreanTokenizer extends Tokenizer {
           if (userFST.findTargetArc(ch, arc, arc, posAhead == pos, userFSTReader) == null) {
             break;
           }
-          output += arc.output.intValue();
+          output += arc.output().intValue();
           if (arc.isFinal()) {
             maxPosAhead = posAhead;
             outputMaxPosAhead = output;
-            arcFinalOutMaxPosAhead = arc.nextFinalOutput.intValue();
+            arcFinalOutMaxPosAhead = arc.nextFinalOutput().intValue();
             anyMatches = true;
           }
         }
@@ -720,7 +720,7 @@ public final class KoreanTokenizer extends Tokenizer {
             break;
           }
 
-          output += arc.output.intValue();
+          output += arc.output().intValue();
 
           // Optimization: for known words that are too-long
           // (compound), we should pre-compute the 2nd
@@ -729,7 +729,7 @@ public final class KoreanTokenizer extends Tokenizer {
           // match is found.
 
           if (arc.isFinal()) {
-            dictionary.lookupWordIds(output + arc.nextFinalOutput.intValue(), wordIdRef);
+            dictionary.lookupWordIds(output + arc.nextFinalOutput().intValue(), wordIdRef);
             if (VERBOSE) {
               System.out.println("    KNOWN word " + new String(buffer.get(pos, posAhead - pos + 1)) + " toPos=" + (posAhead + 1) + " " + wordIdRef.length + " wordIDs");
             }
@@ -760,6 +760,7 @@ public final class KoreanTokenizer extends Tokenizer {
           unknownWordLength = 1;
           UnicodeScript scriptCode = UnicodeScript.of((int) firstCharacter);
           final boolean isPunct = isPunctuation(firstCharacter);
+          final boolean isDigit = Character.isDigit(firstCharacter);
           for (int posAhead = pos + 1; unknownWordLength < MAX_UNKNOWN_WORD_LENGTH; posAhead++) {
             int next = buffer.get(posAhead);
             if (next == -1) {
@@ -774,7 +775,10 @@ public final class KoreanTokenizer extends Tokenizer {
                 || chType == Character.NON_SPACING_MARK;
 
             if (sameScript
+                  // split on punctuation
                   && isPunctuation(ch, chType) == isPunct
+                  // split on digit
+                  && Character.isDigit(ch) == isDigit
                   && characterDefinition.isGroup(ch)) {
               unknownWordLength++;
             } else {
