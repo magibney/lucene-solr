@@ -43,13 +43,13 @@ public class TermFacetCache {
 
     @Override
     public int hashCode() {
-      return qrk.hashCode() ^ fieldName.hashCode();
+      return qrk == null ? fieldName.hashCode() : qrk.hashCode() ^ fieldName.hashCode();
     }
 
     @Override
     public boolean equals(Object obj) {
       FacetCacheKey other = (FacetCacheKey)obj;
-      return fieldName.equals(other.fieldName) && qrk.equals(other.qrk);
+      return fieldName.equals(other.fieldName) && (qrk == null ? other.qrk == null : qrk.equals(other.qrk));
     }
 
   }
