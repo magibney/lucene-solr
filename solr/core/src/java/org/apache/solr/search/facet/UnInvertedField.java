@@ -38,6 +38,7 @@ import org.apache.lucene.util.FixedBitSet;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.SolrException.ErrorCode;
 import org.apache.solr.index.SlowCompositeReaderWrapper;
+import org.apache.solr.request.TermFacetCache.CacheUpdater;
 import org.apache.solr.schema.FieldType;
 import org.apache.solr.schema.TrieField;
 import org.apache.solr.search.BitDocSet;
@@ -317,7 +318,7 @@ public class UnInvertedField extends DocTermOrds {
 
 
 
-  private void getCounts(FacetFieldProcessorByArrayUIF processor, CountSlotAcc counts) throws IOException {
+  private void getCounts(FacetFieldProcessorByArrayUIF processor) throws IOException {
     DocSet docs = processor.fcontext.base;
     int baseSize = docs.size();
     int maxDoc = searcher.maxDoc();
@@ -325,6 +326,22 @@ public class UnInvertedField extends DocTermOrds {
     // what about allBuckets?
     if (baseSize < processor.effectiveMincount) {
       return;
+    }
+
+    final SweepCountAccStruct[] sweepCountAccs = processor.getSweepDocSets(processor.collectAcc == null && processor.allBucketsAcc == null);
+    if (sweepCountAccs == null) {
+      return;
+    }
+    boolean hasCacheUpdater = false;
+    final CountSlotAcc[] countAccs = new CountSlotAcc[sweepCountAccs.length];
+    final CacheUpdater[] cacheUpdaters = new CacheUpdater[sweepCountAccs.length];
+    for (int i = sweepCountAccs.length - 1; i >= 0; i--) {
+      countAccs[i] = sweepCountAccs[i].countAccEntry.countAcc;
+      final CacheUpdater cacheUpdater = sweepCountAccs[i].cacheUpdater;
+      if (cacheUpdater != null) {
+        cacheUpdaters[i] = cacheUpdater;
+        hasCacheUpdater = true;
+      }
     }
 
     final int[] index = this.index;
@@ -344,16 +361,38 @@ public class UnInvertedField extends DocTermOrds {
     // For the biggest terms, do straight set intersections
     for (TopTerm tt : bigTerms.values()) {
       // TODO: counts could be deferred if sorting by index order
-      counts.incrementCount(tt.termNum, searcher.numDocs(tt.termQuery, docs));
+      final int termOrd = tt.termNum;
+      final int count = searcher.numDocs(tt.termQuery, docs);
+      int i = sweepCountAccs.length;
+      while (i-- > 0) {
+        final SweepCountAccStruct entry = sweepCountAccs[i];
+        entry.countAccEntry.countAcc.incrementCount(termOrd, count);
+      }
     }
 
     // TODO: we could short-circuit counting altogether for sorted faceting
     // where we already have enough terms from the bigTerms
 
     if (termInstances > 0) {
-      DocIterator iter = docs.iterator();
+      final SweepDocIterator iter;
+      final int activeCt = sweepCountAccs.length;
+      if (activeCt == 1) {
+        SweepCountAccStruct entry = sweepCountAccs[0];
+        iter = new SingletonDocIterator(entry.docSet.iterator(), entry.isBase);
+      } else {
+        DocIterator[] subIterators = new DocIterator[activeCt];
+        SweepCountAccStruct entry;
+        int i = 0;
+        do {
+          entry = sweepCountAccs[i];
+          subIterators[i] = entry.docSet.iterator();
+        } while (++i < activeCt);
+        iter = new UnionDocIterator(subIterators, entry.isBase);
+      }
+      final SegCountGlobal counts = new SegCountGlobal(countAccs);
       while (iter.hasNext()) {
         int doc = iter.nextDoc();
+        int maxIdx = iter.registerCounts(counts);
         int code = index[doc];
 
         if ((code & 0x80000000)!=0) {
@@ -370,7 +409,7 @@ public class UnInvertedField extends DocTermOrds {
             }
             if (delta == 0) break;
             tnum += delta - TNUM_OFFSET;
-            counts.incrementCount(tnum,1);
+            counts.incrementCount(-1, tnum, 1, maxIdx);
           }
         } else {
           int tnum = 0;
@@ -380,7 +419,7 @@ public class UnInvertedField extends DocTermOrds {
             if ((code & 0x80) == 0) {
               if (delta == 0) break;
               tnum += delta - TNUM_OFFSET;
-              counts.incrementCount(tnum,1);
+              counts.incrementCount(-1, tnum, 1, maxIdx);
               delta = 0;
             }
             code >>>= 8;
@@ -392,7 +431,19 @@ public class UnInvertedField extends DocTermOrds {
     if (doNegative) {
       for (int i=0; i<numTermsInField; i++) {
  //       counts[i] = maxTermCounts[i] - counts[i];
-        counts.incrementCount(i, maxTermCounts[i] - counts.getCount(i)*2);
+        int j = countAccs.length;
+        while (j-- > 0) {
+          final CountSlotAcc countAcc = countAccs[j];
+          countAcc.incrementCount(i, maxTermCounts[i] - countAcc.getCount(i)*2);
+        }
+      }
+    }
+
+    if (hasCacheUpdater) {
+      for (CacheUpdater cacheUpdater : cacheUpdaters) {
+        if (cacheUpdater != null) {
+          cacheUpdater.updateTopLevel();
+        }
       }
     }
 
@@ -411,7 +462,7 @@ public class UnInvertedField extends DocTermOrds {
 
   public void collectDocs(FacetFieldProcessorByArrayUIF processor) throws IOException {
     if (processor.collectAcc==null && processor.allBucketsAcc == null && processor.startTermIndex == 0 && processor.endTermIndex >= numTermsInField) {
-      getCounts(processor, processor.countAcc);
+      getCounts(processor);
       return;
     }
 
@@ -433,6 +484,15 @@ public class UnInvertedField extends DocTermOrds {
     final SweepCountAccStruct[] sweepCountAccs = processor.getSweepDocSets(processor.collectAcc == null && processor.allBucketsAcc == null);
     if (sweepCountAccs == null) {
       return;
+    }
+    boolean hasCacheUpdater = false;
+    final CacheUpdater[] cacheUpdaters = new CacheUpdater[sweepCountAccs.length];
+    for (int i = sweepCountAccs.length - 1; i >= 0; i--) {
+      final CacheUpdater cacheUpdater = sweepCountAccs[i].cacheUpdater;
+      if (cacheUpdater != null) {
+        cacheUpdaters[i] = cacheUpdater;
+        hasCacheUpdater = true;
+      }
     }
 
     for (TopTerm tt : bigTerms.values()) {
@@ -562,6 +622,13 @@ public class UnInvertedField extends DocTermOrds {
       }
     }
 
+    if (hasCacheUpdater) {
+      for (CacheUpdater cacheUpdater : cacheUpdaters) {
+        if (cacheUpdater != null) {
+          cacheUpdater.updateTopLevel();
+        }
+      }
+    }
 
   }
 

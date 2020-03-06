@@ -187,9 +187,8 @@ public class TestJsonFacets extends SolrTestCaseHS {
     int lookups = 0;
     int hits = 0;
     for (String f : Arrays.asList("where_s",
-                                  // nocommit: FacetFieldProcessorByArrayUIF doesn't insert yet?
-                                  // "where_s_multi_uninvert", // nocommit
-                                  // "where_s_single_uninvert", // nocommit
+                                  "where_s_multi_uninvert",
+                                  "where_s_single_uninvert",
                                   "where_s_multi_not_uninvert_dv",
                                   "where_s_single_not_uninvert_dv")) {
       
