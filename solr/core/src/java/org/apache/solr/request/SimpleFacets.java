@@ -594,12 +594,12 @@ public class SimpleFacets {
           boolean external = params.getBool("distrib", true);
           Set<String> fl = rb.rsp.getReturnFields().getRequestedFieldNames();
           int threshold = params.getFieldInt(field, "countCacheDf", 0);
-          if (threshold == 0) {
-            // allow 0 as an explicit default value.
-            threshold = TermFacetCache.DEFAULT_THRESHOLD;
-          } else if (threshold < 0) {
+          if (threshold < 0 || (prefix != null && !prefix.isEmpty())) {
             // facet cache disabled
             threshold = Integer.MAX_VALUE;
+          } else if (threshold == 0) {
+            // allow 0 as an explicit default value.
+            threshold = TermFacetCache.DEFAULT_THRESHOLD;
           }
           counts = DocValuesFacets.getCounts(searcher, docs, field, offset,limit, mincount, missing, sort, prefix, termFilter, fdebug, threshold, rb);
           break;
