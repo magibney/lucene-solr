@@ -212,6 +212,15 @@ abstract class FacetFieldProcessor extends FacetProcessor<FacetField> {
       this.countAccEntry = new CountAccEntry(countAcc, roCountAcc);
       this.cacheUpdater = cacheUpdater;
     }
+    public SweepCountAccStruct(SweepCountAccStruct t, DocSet replaceDocSet) {
+      this.qKey = t.qKey;
+      this.docSet = replaceDocSet;
+      this.cacheState = t.cacheState;
+      this.alreadyCached = t.alreadyCached;
+      this.isBase = t.isBase;
+      this.countAccEntry = t.countAccEntry;
+      this.cacheUpdater = t.cacheUpdater;
+    }
   }
   static final class CountAccEntry {
     final CountSlotAcc countAcc;

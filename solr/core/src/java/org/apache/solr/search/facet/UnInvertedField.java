@@ -332,21 +332,27 @@ public class UnInvertedField extends DocTermOrds {
     if (sweepCountAccs == null) {
       return;
     }
+    int baseIdx = -1;
     boolean hasCacheUpdater = false;
     final CountSlotAcc[] countAccs = new CountSlotAcc[sweepCountAccs.length];
     final CacheUpdater[] cacheUpdaters = new CacheUpdater[sweepCountAccs.length];
     for (int i = sweepCountAccs.length - 1; i >= 0; i--) {
-      countAccs[i] = sweepCountAccs[i].countAccEntry.countAcc;
-      final CacheUpdater cacheUpdater = sweepCountAccs[i].cacheUpdater;
+      SweepCountAccStruct sweepCountAcc = sweepCountAccs[i];
+      if (sweepCountAcc.isBase) {
+        baseIdx = i;
+      }
+      countAccs[i] = sweepCountAcc.countAccEntry.countAcc;
+      final CacheUpdater cacheUpdater = sweepCountAcc.cacheUpdater;
       if (cacheUpdater != null) {
         cacheUpdaters[i] = cacheUpdater;
         hasCacheUpdater = true;
       }
     }
 
+
     final int[] index = this.index;
 
-    boolean doNegative = baseSize > maxDoc >> 1 && termInstances > 0 && docs instanceof BitDocSet;
+    boolean doNegative = baseSize > maxDoc >> 1 && termInstances > 0 && docs instanceof BitDocSet && baseIdx >= 0;
 
     if (doNegative) {
       FixedBitSet bs = ((BitDocSet) docs).getBits().clone();
@@ -356,17 +362,19 @@ public class UnInvertedField extends DocTermOrds {
       docs = new BitDocSet(bs, maxDoc - baseSize);
       // simply negating will mean that we have deleted docs in the set.
       // that should be OK, as their entries in our table should be empty.
+      SweepCountAccStruct sweepCountAcc = sweepCountAccs[baseIdx];
+      sweepCountAcc = new SweepCountAccStruct(sweepCountAcc, docs);
+      sweepCountAccs[baseIdx] = sweepCountAcc;
     }
 
     // For the biggest terms, do straight set intersections
     for (TopTerm tt : bigTerms.values()) {
       // TODO: counts could be deferred if sorting by index order
       final int termOrd = tt.termNum;
-      final int count = searcher.numDocs(tt.termQuery, docs);
       int i = sweepCountAccs.length;
       while (i-- > 0) {
         final SweepCountAccStruct entry = sweepCountAccs[i];
-        entry.countAccEntry.countAcc.incrementCount(termOrd, count);
+        entry.countAccEntry.countAcc.incrementCount(termOrd, searcher.numDocs(tt.termQuery, entry.docSet));
       }
     }
 
@@ -429,13 +437,10 @@ public class UnInvertedField extends DocTermOrds {
     }
 
     if (doNegative) {
+      final CountSlotAcc baseCounts = processor.countAcc;
       for (int i=0; i<numTermsInField; i++) {
  //       counts[i] = maxTermCounts[i] - counts[i];
-        int j = countAccs.length;
-        while (j-- > 0) {
-          final CountSlotAcc countAcc = countAccs[j];
-          countAcc.incrementCount(i, maxTermCounts[i] - countAcc.getCount(i)*2);
-        }
+        baseCounts.incrementCount(i, maxTermCounts[i] - baseCounts.getCount(i)*2);
       }
     }
 
