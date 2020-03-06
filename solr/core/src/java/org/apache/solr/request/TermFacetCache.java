@@ -28,7 +28,7 @@ import org.apache.solr.search.QueryResultKey;
 public class TermFacetCache {
 
   public static final String NAME = "termFacetCache";
-  public static final int DEFAULT_THRESHOLD = 5000;
+  public static int DEFAULT_THRESHOLD = 5000; // non-final to support setting by tests
 
 
   public static final class FacetCacheKey {
