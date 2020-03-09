@@ -19,20 +19,27 @@ package org.apache.solr.search.facet;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.IntFunction;
 
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanClause.Occur;
 import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.Query;
+import org.apache.lucene.search.join.ScoreMode;
+import org.apache.lucene.search.join.ToChildBlockJoinQuery;
+import org.apache.lucene.search.join.ToParentBlockJoinQuery;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.util.SimpleOrderedMap;
 import org.apache.solr.handler.component.ResponseBuilder;
+import org.apache.solr.query.FilterQuery;
 import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.request.SolrRequestInfo;
 import org.apache.solr.schema.SchemaField;
@@ -43,6 +50,7 @@ import org.apache.solr.search.QParser;
 import org.apache.solr.search.SolrIndexSearcher;
 import org.apache.solr.search.SyntaxError;
 import org.apache.solr.search.facet.SlotAcc.SlotContext;
+import org.apache.solr.search.join.BlockJoinParentQParser;
 
 /** Base abstraction for a class that computes facets. This is fairly internal to the module. */
 public abstract class FacetProcessor<FacetRequestT extends FacetRequest>  {
@@ -211,6 +219,21 @@ public abstract class FacetProcessor<FacetRequestT extends FacetRequest>  {
 
     List<Query> qlist = new ArrayList<>();
 
+    if (fcontext.baseFilters != null) {
+      for (Query q : fcontext.baseFilters) {
+        if (!excludeSet.containsKey(q)) {
+          qlist.add(q);
+        }
+      }
+      // recompute the base domain
+      fcontext.base = fcontext.searcher.getDocSet(qlist);
+      fcontext.baseFilters = qlist.toArray(new Query[qlist.size()]);
+      return;
+    } else if (true) {
+      //nocommit I think this block obviates the responsebuilder dependency? (see below)
+      throw new AssertionError();
+    }
+
     // TODO: somehow remove responsebuilder dependency
     ResponseBuilder rb = SolrRequestInfo.getRequestInfo().getResponseBuilder();
 
@@ -279,6 +302,8 @@ public abstract class FacetProcessor<FacetRequestT extends FacetRequest>  {
     DocSet input = fcontext.base;
     DocSet result;
 
+    //nocommit: we're using this query for caching only; should we use for query execution as well?
+    final Query q;
     if (freq.domain.toChildren) {
       // If there are filters on this facet, then use them as acceptDocs when executing toChildren.
       // We need to remember to not redundantly re-apply these filters after.
@@ -288,14 +313,47 @@ public abstract class FacetProcessor<FacetRequestT extends FacetRequest>  {
       } else {
         appliedFilters = true;
       }
+      ToChildBlockJoinQuery toChildQuery = new ToChildBlockJoinQuery(collapseFilters(fcontext.baseFilters), BlockJoinParentQParser.getCachedFilter(fcontext.req, parentQuery).getFilter());
+      q = appliedFilters ? new FilteredToChildBlockJoinQuery(toChildQuery, filterQs) : toChildQuery;
       result = BlockJoin.toChildren(input, parents, acceptDocs, fcontext.qcontext);
     } else {
+      q = new ToParentBlockJoinQuery(collapseFilters(fcontext.baseFilters), BlockJoinParentQParser.getCachedFilter(fcontext.req, parentQuery).getFilter(), ScoreMode.None);
       result = BlockJoin.toParents(input, parents, fcontext.qcontext);
     }
 
     fcontext.base = result;
-    fcontext.baseFilters = null; // unusual case; TODO: can we make a cache key for this base domain?
+    fcontext.baseFilters = new Query[] {q};
     return appliedFilters;
+  }
+
+  private static class FilteredToChildBlockJoinQuery extends FilterQuery {
+
+    private final Set<Query> filterQs;
+
+    public FilteredToChildBlockJoinQuery(Query q, List<Query> filterQs) {
+      super(q);
+      this.filterQs = new HashSet<>(filterQs);
+    }
+
+    @Override
+    public int hashCode() {
+      return q.hashCode() ^ filterQs.hashCode();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (!(obj instanceof FilteredToChildBlockJoinQuery)) return false;
+      FilteredToChildBlockJoinQuery fq = (FilteredToChildBlockJoinQuery)obj;
+      return this.q.equals(fq.q) && this.filterQs.equals(fq.filterQs);
+    }
+  }
+
+  private static BooleanQuery collapseFilters(Query[] clauses) {
+    BooleanQuery.Builder b = new BooleanQuery.Builder();
+    for (Query q : clauses) {
+      b.add(q, Occur.FILTER);
+    }
+    return b.build();
   }
 
   protected void processStats(SimpleOrderedMap<Object> bucket, Query bucketQ, DocSet docs, int docCount) throws IOException {
