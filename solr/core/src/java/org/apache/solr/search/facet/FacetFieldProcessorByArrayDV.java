@@ -179,8 +179,8 @@ class FacetFieldProcessorByArrayDV extends FacetFieldProcessorByArray {
         // TODO: get sub from multi?
         multiDv = subCtx.reader().getSortedSetDocValues(sf.getName());
         if (multiDv == null) {
-          // no term occurrences in this seg; skip unless freq.missing
-          if (freq.missing) {
+          // no term occurrences in this seg; skip unless we're processing missing buckets inline
+          if (missingSlot >= 0) {
             multiDv = DocValues.emptySortedSet();
           } else {
             continue;
@@ -194,8 +194,8 @@ class FacetFieldProcessorByArrayDV extends FacetFieldProcessorByArray {
       } else {
         singleDv = subCtx.reader().getSortedDocValues(sf.getName());
         if (singleDv == null) {
-          // no term occurrences in this seg; skip unless freq.missing
-          if (freq.missing) {
+          // no term occurrences in this seg; skip unless we're processing missing buckets inline
+          if (missingSlot >= 0) {
             singleDv = DocValues.emptySorted();
           } else {
             continue;
@@ -243,7 +243,7 @@ class FacetFieldProcessorByArrayDV extends FacetFieldProcessorByArray {
 
   private void collectPerSeg(SortedDocValues singleDv, SweepDISI disi, LongValues toGlobal) throws IOException {
     final int valueCount = singleDv.getValueCount();
-    final boolean doMissing = freq.missing || disi.cacheUpdaters != null;
+    final boolean doMissing = missingSlot >= 0;
     final int missingIdx;
     final int segMax;
     if (doMissing) {
@@ -328,7 +328,7 @@ class FacetFieldProcessorByArrayDV extends FacetFieldProcessorByArray {
 
   private void collectPerSeg(SortedSetDocValues multiDv, SweepDISI disi, LongValues toGlobal) throws IOException {
     final int valueCount = (int)multiDv.getValueCount();
-    final boolean doMissing = freq.missing || disi.cacheUpdaters != null;
+    final boolean doMissing = missingSlot >= 0;
     final int missingIdx;
     final int segMax;
     if (doMissing) {
@@ -563,7 +563,7 @@ class FacetFieldProcessorByArrayDV extends FacetFieldProcessorByArray {
   private void collectDocs(SortedDocValues singleDv, SweepDISI disi, LongValues toGlobal) throws IOException {
     int doc;
     final SegCountGlobal segCounter = getSegCountGlobal(disi, singleDv);
-    final int segMissingIndicator = ~getSegMissingIdx(freq.missing, segCounter.getSegMissingIdx());
+    final int segMissingIndicator = ~getSegMissingIdx(segCounter.getSegMissingIdx());
     while ((doc = disi.nextDoc()) != DocIdSetIterator.NO_MORE_DOCS) {
       if (singleDv.advanceExact(doc)) {
         final int maxIdx = disi.registerCounts(segCounter);
@@ -579,7 +579,7 @@ class FacetFieldProcessorByArrayDV extends FacetFieldProcessorByArray {
 
   private void collectCounts(SortedDocValues singleDv, SweepDISI disi, LongValues toGlobal) throws IOException {
     final SegCountGlobal segCounter = getSegCountGlobal(disi, singleDv);
-    final int segMissingIdx = getSegMissingIdx(freq.missing, segCounter.getSegMissingIdx());
+    final int segMissingIdx = getSegMissingIdx(segCounter.getSegMissingIdx());
     int doc;
     if (singleDv instanceof FieldCacheImpl.SortedDocValuesImpl.Iter) {
 
@@ -620,8 +620,8 @@ class FacetFieldProcessorByArrayDV extends FacetFieldProcessorByArray {
     segCounter.register();
   }
 
-  private int getSegMissingIdx(boolean doMissing, int segMissingIdx) {
-    if (doMissing) {
+  private int getSegMissingIdx(int segMissingIdx) {
+    if (missingSlot >= 0) {
       // ensure segMissingIdx >= 0; exact value is irrelevant if segCounter doesn't track seg-local missing
       return segMissingIdx < 0 ? ~segMissingIdx : segMissingIdx;
     } else if (segMissingIdx >= 0) {
@@ -633,7 +633,7 @@ class FacetFieldProcessorByArrayDV extends FacetFieldProcessorByArray {
 
   private void collectDocs(SortedSetDocValues multiDv, SweepDISI disi, LongValues toGlobal) throws IOException {
     final SegCountGlobal segCounter = getSegCountGlobal(disi, multiDv);
-    final int segMissingIndicator = ~getSegMissingIdx(freq.missing, segCounter.getSegMissingIdx());
+    final int segMissingIndicator = ~getSegMissingIdx(segCounter.getSegMissingIdx());
     int doc;
     while ((doc = disi.nextDoc()) != DocIdSetIterator.NO_MORE_DOCS) {
       if (multiDv.advanceExact(doc)) {
@@ -654,7 +654,7 @@ class FacetFieldProcessorByArrayDV extends FacetFieldProcessorByArray {
 
   private void collectCounts(SortedSetDocValues multiDv, SweepDISI disi, LongValues toGlobal) throws IOException {
     final SegCountGlobal segCounter = getSegCountGlobal(disi, multiDv);
-    final int segMissingIdx = getSegMissingIdx(freq.missing, segCounter.getSegMissingIdx());
+    final int segMissingIdx = getSegMissingIdx(segCounter.getSegMissingIdx());
     int doc;
     while ((doc = disi.nextDoc()) != DocIdSetIterator.NO_MORE_DOCS) {
       if (multiDv.advanceExact(doc)) {

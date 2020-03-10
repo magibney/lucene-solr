@@ -49,7 +49,6 @@ import org.apache.solr.search.DocSet;
 import org.apache.solr.search.Filter;
 import org.apache.solr.search.QueryResultKey;
 import org.apache.solr.search.SolrCache;
-import org.apache.solr.search.facet.FacetRequest.Domain;
 import org.apache.solr.search.facet.SlotAcc.SlotContext;
 
 import static org.apache.solr.search.facet.FacetContext.SKIP_FACET;
@@ -116,23 +115,12 @@ abstract class FacetFieldProcessor extends FacetProcessor<FacetField> {
     }
     assert null != this.sort;
     final SolrCache<FacetCacheKey, Map<CacheKey, SegmentCacheEntry>> facetCache = fcontext.searcher.getCache(TermFacetCache.NAME);
-    if (facetCache != null && this instanceof FacetFieldProcessorByArray && (freq.prefix == null || freq.prefix.isEmpty()) && domainCacheable(freq.domain)) {
+    if (facetCache != null && this instanceof FacetFieldProcessorByArray && (freq.prefix == null || freq.prefix.isEmpty())) {
       CacheKey topLevelKey = fcontext.searcher.getIndexReader().getReaderCacheHelper().getKey();
       cachingCountSlotAccFactory = new CachingCountSlotAccFactory(facetCache, topLevelKey, freq.field);
     } else {
       cachingCountSlotAccFactory = null;
     }
-  }
-
-  private static boolean domainCacheable(Domain domain) {
-    if (domain == null) {
-      return true;
-    }
-    if (domain.excludeTags != null && !domain.excludeTags.isEmpty()) {
-      // excludeTags causes testStats and testStatsDistrib to fail
-      return false;
-    }
-    return true;
   }
 
   private final IntObjectMap<List<SweepCountAccStruct>> trackSweepCountAccs = new IntObjectScatterMap<>();
@@ -659,6 +647,7 @@ abstract class FacetFieldProcessor extends FacetProcessor<FacetField> {
     }
 
     if (freq.missing) {
+      //nocommit I think the below TODO is addressed by the inline missing bucket collection part of this PR?
       // TODO: it would be more efficient to build up a missing DocSet if we need it here anyway.
       if (missingSlot < 0) {
         fillBucket(missingBucket, getFieldMissingQuery(fcontext.searcher, freq.field), null, false, null);
