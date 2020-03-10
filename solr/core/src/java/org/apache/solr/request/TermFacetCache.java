@@ -58,15 +58,18 @@ public class TermFacetCache {
 
     public final byte[] counts;
     public final int[] topLevelCounts;
+    public final boolean hasMissingSlot;
 
     public SegmentCacheEntry(byte[] counts) {
       this.counts = counts;
       this.topLevelCounts = null;
+      this.hasMissingSlot = false;
     }
 
-    public SegmentCacheEntry(int[] topLevelCounts) {
+    public SegmentCacheEntry(int[] topLevelCounts, boolean includesMissingCount) {
       this.counts = null;
       this.topLevelCounts = topLevelCounts;
+      this.hasMissingSlot = includesMissingCount;
     }
 
   }

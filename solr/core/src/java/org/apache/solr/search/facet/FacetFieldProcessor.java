@@ -145,13 +145,13 @@ abstract class FacetFieldProcessor extends FacetProcessor<FacetField> {
    * instance of CountSlotAcc.
    */
   protected static interface CountSlotAccFactory {
-    SweepCountAccStruct newInstance(QueryResultKey qKey, DocSet docs, boolean isBase, FacetContext fcontext, int numSlots);
+    SweepCountAccStruct newInstance(QueryResultKey qKey, DocSet docs, boolean isBase, FacetContext fcontext, int numSlots, boolean includeMissingCount);
   }
 
   protected static final CountSlotAccFactory DEFAULT_COUNT_ACC_FACTORY = new CountSlotAccFactory() {
 
     @Override
-    public SweepCountAccStruct newInstance(QueryResultKey qKey, DocSet docs, boolean isBase, FacetContext fcontext, int numSlots) {
+    public SweepCountAccStruct newInstance(QueryResultKey qKey, DocSet docs, boolean isBase, FacetContext fcontext, int numSlots, boolean includeMissingCount) {
       final CountSlotAcc count = new CountSlotArrAcc(fcontext, numSlots);
       return new SweepCountAccStruct(qKey, docs, CacheState.DO_NOT_CACHE, null, isBase, count, new ReadOnlyCountSlotAccWrapper(fcontext, count), null);
     }
@@ -194,7 +194,8 @@ abstract class FacetFieldProcessor extends FacetProcessor<FacetField> {
         factory = cachingCountSlotAccFactory;
       }
     }
-    final SweepCountAccStruct ret = factory.newInstance(qKey, docs, isBase, fcontext, numSlots);
+    final boolean cacheIncludesMissingCount = this instanceof FacetFieldProcessorByArrayDV;
+    final SweepCountAccStruct ret = factory.newInstance(qKey, docs, isBase, fcontext, numSlots, cacheIncludesMissingCount);
     extantSameSize.add(ret);
     sweepCountAccs.add(ret);
     if (qKey != null) {
@@ -1160,7 +1161,7 @@ abstract class FacetFieldProcessor extends FacetProcessor<FacetField> {
     }
 
     @Override
-    public SweepCountAccStruct newInstance(QueryResultKey qKey, DocSet docs, boolean isBase, FacetContext fcontext, int numSlots) {
+    public SweepCountAccStruct newInstance(QueryResultKey qKey, DocSet docs, boolean isBase, FacetContext fcontext, int numSlots, boolean includeMissingCount) {
       FacetCacheKey facetCacheKey = new FacetCacheKey(qKey, field);
       final Map<CacheKey, SegmentCacheEntry> segmentCache = facetCache.get(facetCacheKey);
       final Map<CacheKey, SegmentCacheEntry> newSegmentCache;
@@ -1172,16 +1173,23 @@ abstract class FacetFieldProcessor extends FacetProcessor<FacetField> {
         newSegmentCache = new HashMap<>(fcontext.searcher.getIndexReader().leaves().size() + 1);
       } else if (segmentCache.containsKey(topLevelKey)) {
         topLevelEntry = segmentCache.get(topLevelKey);
-        CachedCountSlotAcc acc = new CachedCountSlotAcc(fcontext, topLevelEntry.topLevelCounts);
-        return new SweepCountAccStruct(qKey, docs, CacheState.CACHED, null, isBase, acc,
-            new ReadOnlyCountSlotAccWrapper(fcontext, acc), acc);
+        if (includeMissingCount && !topLevelEntry.hasMissingSlot) {
+          // it is possible in some cases to have cached counts that do not incorporate "missing" count. If "missing" count
+          // has been requested, it's far simpler to simply re-initialize the cache entry to include "missing" count.
+          cacheState = CacheState.NOT_CACHED;
+          newSegmentCache = new HashMap<>(fcontext.searcher.getIndexReader().leaves().size() + 1);
+        } else {
+          CachedCountSlotAcc acc = new CachedCountSlotAcc(fcontext, topLevelEntry.topLevelCounts);
+          return new SweepCountAccStruct(qKey, docs, CacheState.CACHED, null, isBase, acc,
+              new ReadOnlyCountSlotAccWrapper(fcontext, acc), acc);
+        }
       } else {
         // defensive copy, since cache entries are shared across threads
         cacheState = CacheState.PARTIALLY_CACHED;
         newSegmentCache = new HashMap<>(fcontext.searcher.getIndexReader().leaves().size() + 1);
         newSegmentCache.putAll(segmentCache);
       }
-      CacheUpdateCountSlotAcc acc = new CacheUpdateCountSlotAcc(fcontext, numSlots, newSegmentCache, topLevelKey, facetCache, facetCacheKey);
+      CacheUpdateCountSlotAcc acc = new CacheUpdateCountSlotAcc(fcontext, numSlots, newSegmentCache, topLevelKey, facetCache, facetCacheKey, includeMissingCount);
       return new SweepCountAccStruct(qKey, docs, cacheState, segmentCache, isBase, acc,
           new ReadOnlyCountSlotAccWrapper(fcontext, acc), acc);
     }

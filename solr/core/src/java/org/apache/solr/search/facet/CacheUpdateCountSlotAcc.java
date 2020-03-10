@@ -38,12 +38,13 @@ final class CacheUpdateCountSlotAcc extends CountSlotAcc implements CacheUpdater
   private final CacheKey topLevelCacheKey;
   private final SolrCache<FacetCacheKey, Map<CacheKey, SegmentCacheEntry>> facetCache;
   private final FacetCacheKey facetCacheKey;
+  private final boolean includesMissingCount;
   private CacheKey leafCacheKey;
   private SegmentCacheEntry cached;
 
   CacheUpdateCountSlotAcc(FacetContext fcontext, int numSlots, Map<CacheKey, SegmentCacheEntry> cachedSegments,
       CacheKey topLevelCacheKey, SolrCache<FacetCacheKey, Map<CacheKey, SegmentCacheEntry>> facetCache,
-      FacetCacheKey facetCacheKey) {
+      FacetCacheKey facetCacheKey, boolean includesMissingCount) {
     super(fcontext);
     this.topLevelCounts = new int[numSlots];
     this.cachedSegments = cachedSegments;
@@ -52,6 +53,7 @@ final class CacheUpdateCountSlotAcc extends CountSlotAcc implements CacheUpdater
     this.topLevelCacheKey = topLevelCacheKey;
     this.facetCache = facetCache;
     this.facetCacheKey = facetCacheKey;
+    this.includesMissingCount = includesMissingCount;
   }
 
   @Override
@@ -82,7 +84,7 @@ final class CacheUpdateCountSlotAcc extends CountSlotAcc implements CacheUpdater
 
   @Override
   public void updateTopLevel() {
-    cachedSegments.put(topLevelCacheKey, new SegmentCacheEntry(topLevelCounts));
+    cachedSegments.put(topLevelCacheKey, new SegmentCacheEntry(topLevelCounts, includesMissingCount));
     facetCache.put(facetCacheKey, cachedSegments);
   }
 

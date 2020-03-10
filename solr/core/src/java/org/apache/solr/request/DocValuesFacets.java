@@ -202,7 +202,7 @@ public class DocValuesFacets {
         }
 
         if (segmentCache != null) {
-          segmentCache.put(topLevelReaderKey, new SegmentCacheEntry(counts));
+          segmentCache.put(topLevelReaderKey, new SegmentCacheEntry(counts, doMissing));
         }
       }
 
