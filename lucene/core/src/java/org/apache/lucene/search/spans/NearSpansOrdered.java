@@ -544,6 +544,8 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
           break;
         case STORED:
           throw new IllegalStateException("checkUnregister should never be called in state STORED");//updatePositionRange(startPosition, endPosition);
+        default:
+          break;
       }
       return false;
     }
@@ -575,7 +577,8 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
      * @param startCeiling disregard (for purpose of returning nextMatch, but do not discard) spans with start &gt;= this parameter
      * @param minEnd when non-negative, defines a minimum threshold for span endPositions. Spans with endPosition &lt; 
      * this value should be discarded forever.
-     * @return 
+     * @return the startPosition of the next match; if negative, indicates the bitwise not ((-return) + 1) of a subsequent
+     * match that is out of the specified range
      */
     @SuppressWarnings("fallthrough")
     public int nextMatch(int hardMinStart, int softMinStart, int startCeiling, int minEnd) throws IOException {
@@ -1115,7 +1118,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
   /**
    * Advances subSpans to next complete match group, combines and orders results, first result goes in spansHead, 
    * subsequent results in spansIter
-   * @return 
+   * @return startPosition of the next complete match group
    */
   private int initNextSpansGroup() throws IOException {
     if (!initializedRepeatGroups) {
