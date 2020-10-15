@@ -76,10 +76,10 @@ public class ShingleWords {
   private static final Pattern TRAILING_ESCAPE_CHAR = Pattern.compile("(^|[^\\\\])\\\\(\\\\\\\\)*$");
   private static final Pattern REPLACE_ESCAPE_CHARS = Pattern.compile("\\\\(.)");
 
-  public static ShingleWords newInstance(NamedList<Object> tmp, ResourceLoader loader) throws IOException {
+  public static ShingleWords newInstance(NamedList<?> tmp, ResourceLoader loader) throws IOException {
     Map<String, Entry<Words<String>, Words<BytesRef>>> shingleWordsPerField = new HashMap<>();
     int overallMaxShingleSlop = -1;
-    for (Entry<String, Object> fieldConfig : tmp) {
+    for (Entry<String, ?> fieldConfig : tmp) {
       String fieldName = fieldConfig.getKey();
       Object val = fieldConfig.getValue();
       int maxSlop;
@@ -92,7 +92,7 @@ public class ShingleWords {
         wordsStream = loader.openResource(wordsResourceName);
         shingleFieldSuffix = DEFAULT_SHINGLE_FIELD_SUFFIX;
       } else if (val instanceof NamedList) {
-        NamedList<Object> config = (NamedList<Object>)val;
+        NamedList<?> config = (NamedList<?>)val;
         wordsResourceName = (String)config.get("words");
         wordsStream = loader.openResource(wordsResourceName);
         val = config.get("maxSlop");
@@ -135,6 +135,7 @@ public class ShingleWords {
     return "ShingleWords{" + ", words=" + shingleWordsPerField + ", maxShingleSlop=" + maxShingleSlop + '}';
   }
 
+  @SuppressWarnings({"unchecked","rawtypes"})
   private ShingleWords(Map<String, Entry<Words<String>, Words<BytesRef>>> shingleWordsPerField, int maxShingleSlop) {
     this.maxShingleSlop = maxShingleSlop;
     this.shingleWordsPerField = shingleWordsPerField;
@@ -145,7 +146,7 @@ public class ShingleWords {
       List<Entry<String, String>> suffixPatterns = new ArrayList<>(size);
       for (String fieldPattern : shingleWordsPerField.keySet()) {
         if (fieldPattern.startsWith("*")) {
-          suffixPatterns.add(new SimpleImmutableEntry(fieldPattern.substring(1), fieldPattern));
+          suffixPatterns.add(new SimpleImmutableEntry<String,String>(fieldPattern.substring(1), fieldPattern));
         }
       }
       if (suffixPatterns.isEmpty()) {
@@ -297,7 +298,7 @@ public class ShingleWords {
   };
 
   private static BytesRef processLine(String line, File f) {
-    return (BytesRef) processLine(line, f == null ? null : f.toString(), DEV_NULL_SET, DEV_NULL_SET);
+    return processLine(line, f == null ? null : f.toString(), DEV_NULL_SET, DEV_NULL_SET);
   }
 
   private static BytesRef processLine(String line, String wordsResourceName, Set<? super String> shingleStrings, Set<? super BytesRef> shingleBytesRefs) {

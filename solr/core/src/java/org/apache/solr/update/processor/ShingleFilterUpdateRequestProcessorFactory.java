@@ -54,11 +54,11 @@ public class ShingleFilterUpdateRequestProcessorFactory extends UpdateRequestPro
 
   private static final JsonPreAnalyzedParser parser = new JsonPreAnalyzedParser();
 
-  private NamedList<Object> shingleWordsSpec;
+  private NamedList<?> shingleWordsSpec;
   private ShingleWords shingleWords;
 
   @Override
-  public void init(NamedList args) {
+  public void init(@SuppressWarnings("rawtypes") NamedList args) {
     super.init(args);
     shingleWordsSpec = args;
   }
@@ -66,7 +66,7 @@ public class ShingleFilterUpdateRequestProcessorFactory extends UpdateRequestPro
   @Override
   public UpdateRequestProcessor getInstance(SolrQueryRequest req, SolrQueryResponse rsp, UpdateRequestProcessor next) {
     if (shingleWordsSpec != null) {
-      NamedList<Object> tmp = shingleWordsSpec;
+      NamedList<?> tmp = shingleWordsSpec;
       shingleWordsSpec = null;
       try {
         shingleWords = ShingleWords.newInstance(tmp, req.getCore().getResourceLoader());

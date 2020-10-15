@@ -990,7 +990,7 @@ public class ExtendedDismaxQParser extends QParser {
   }
 
   public static interface GraphQueryFilter {
-    void init(NamedList args, ResourceLoader loader);
+    void init(NamedList<?> args, ResourceLoader loader);
     void requestInit(SolrQueryRequest req);
     SpanQuery filter(SpanNearQuery q, int slop, int minClauseSize, SolrParams params) throws SyntaxError;
   }
