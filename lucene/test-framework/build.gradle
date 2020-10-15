@@ -29,6 +29,7 @@ dependencies {
     exclude group: "org.hamcrest"
   })
   api ('org.hamcrest:hamcrest')
+  api ('com.carrotsearch:hppc')
 
   implementation project(':lucene:codecs')
 }

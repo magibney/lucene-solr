@@ -20,6 +20,8 @@ apply plugin: 'java-library'
 description = 'Lucene core library'
 
 dependencies {
+  api ('com.carrotsearch:hppc')
   testImplementation project(':lucene:codecs')
   testImplementation project(':lucene:test-framework')
+  testImplementation project(':lucene:analysis:common')
 }
