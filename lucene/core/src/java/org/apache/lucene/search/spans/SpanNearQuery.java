@@ -377,6 +377,10 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
     }
   }
 
+  /**
+   * Creates SpanNearQuery scorer instances
+   * @lucene.internal
+   */
   public class SpanNearWeight extends SpanWeight {
 
     final List<SpanWeight> subWeights;
