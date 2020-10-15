@@ -178,6 +178,7 @@ public final class TermSpansRepeatBuffer {
     }
   }
   
+  @SuppressWarnings("fallthrough")
   private int advanceBacking(final int repeatIndex, final boolean initialized) throws IOException {
     if (head - tail >= capacity) {
       increaseCapacity();
