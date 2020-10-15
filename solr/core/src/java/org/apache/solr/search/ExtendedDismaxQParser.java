@@ -67,7 +67,7 @@ import com.google.common.collect.Multimap;
 import com.google.common.collect.Multimaps;
 import java.io.IOException;
 import org.apache.lucene.analysis.TokenStream;
-import org.apache.lucene.analysis.util.ResourceLoader;
+import org.apache.lucene.util.ResourceLoader;
 import org.apache.lucene.search.spans.SpanNearQuery;
 
 /**
@@ -989,7 +989,7 @@ public class ExtendedDismaxQParser extends QParser {
   }
 
   public static interface GraphQueryFilter {
-    void init(NamedList args, ResourceLoader loader);
+    void init(NamedList<?> args, ResourceLoader loader);
     void requestInit(SolrQueryRequest req);
     SpanQuery filter(SpanNearQuery q, int slop, int minClauseSize, SolrParams params) throws SyntaxError;
   }

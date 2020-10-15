@@ -28,7 +28,7 @@ import java.util.Map.Entry;
 import java.util.Set;
 import org.apache.solr.analysis.ShingleWords;
 import org.apache.solr.analysis.ShingleWords.Words;
-import org.apache.lucene.analysis.util.ResourceLoader;
+import org.apache.lucene.util.ResourceLoader;
 import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.Terms;
@@ -86,8 +86,9 @@ public class GraphQueryDensityFilter implements GraphQueryFilter {
   private boolean supportVariableTermSpansLength;
   private Map<String, Map<BytesRef, DensityEntry>> densityLookup;
 
+  @SuppressWarnings("unchecked")
   @Override
-  public void init(NamedList args, ResourceLoader loader) {
+  public void init(NamedList<?> args, ResourceLoader loader) {
     denseFields = (NamedList<Integer>)args.remove(DENSE_FIELDS_ARGNAME);
     Object tmp = args.remove(MAX_DENSE_CLAUSES_ARGNAME);
     this.maxDenseClauses = tmp == null ? DEFAULT_MAX_DENSE_CLAUSES : (Integer)tmp;

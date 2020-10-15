@@ -19,7 +19,7 @@ package org.apache.solr.search;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.util.List;
-import org.apache.lucene.analysis.util.ResourceLoader;
+import org.apache.lucene.util.ResourceLoader;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.params.SolrParams;
 import org.apache.solr.common.util.NamedList;
@@ -47,7 +47,7 @@ public class ExtendedDismaxQParserPlugin extends QParserPlugin {
   public static final boolean DEFAULT_USE_SPANS_FOR_GRAPH_QUERIES = false;
   public static final boolean DEFAULT_USE_LEGACY_IMPLEMENTATION = false;
   
-  private NamedList graphQueryFilterSpec;
+  private NamedList<?> graphQueryFilterSpec;
   private GraphQueryFilter graphQueryFilter;
   private boolean phraseAsGraphQuery;
   private boolean explicitPhraseAsGraphQuery;
@@ -56,8 +56,9 @@ public class ExtendedDismaxQParserPlugin extends QParserPlugin {
   private boolean useSpansForGraphQueries;
   
   @Override
-  public void init(NamedList args) {
-    graphQueryFilterSpec = (NamedList)args.remove(GRAPH_QUERY_FILTER_ARGNAME);
+  public void init(@SuppressWarnings({"rawtypes"}) NamedList args) {
+    super.init(args);
+    graphQueryFilterSpec = (NamedList<?>)args.remove(GRAPH_QUERY_FILTER_ARGNAME);
     Boolean tmp;
     phraseAsGraphQuery = (tmp = args.removeBooleanArg(PHRASE_AS_GRAPH_QUERY_ARGNAME)) == null ? DEFAULT_PHRASE_AS_GRAPH_QUERY : tmp;
     explicitPhraseAsGraphQuery = (tmp = args.removeBooleanArg(EXPLICIT_PHRASE_AS_GRAPH_QUERY_ARGNAME)) == null ? DEFAULT_EXPLICIT_PHRASE_AS_GRAPH_QUERY : tmp;
@@ -67,12 +68,13 @@ public class ExtendedDismaxQParserPlugin extends QParserPlugin {
     super.init(args);
   }
 
-  private GraphQueryFilter initGraphQueryFilter(NamedList args, ResourceLoader loader) {
-    List classNameArgs = args.removeAll("class");
+  private GraphQueryFilter initGraphQueryFilter(NamedList<?> args, ResourceLoader loader) {
+    @SuppressWarnings("unchecked")
+    List<String> classNameArgs = (List<String>)args.removeAll("class");
     if (classNameArgs == null || classNameArgs.size() != 1) {
       throw new IllegalArgumentException("must specify a valid class for "+GRAPH_QUERY_FILTER_ARGNAME+"; found: "+classNameArgs);
     } else {
-      String className = (String)classNameArgs.get(0);
+      String className = classNameArgs.get(0);
       ClassLoader cl = ExtendedDismaxQParserPlugin.class.getClassLoader();
       try {
         try {
@@ -108,7 +110,7 @@ public class ExtendedDismaxQParserPlugin extends QParserPlugin {
   @Override
   public QParser createParser(String qstr, SolrParams localParams, SolrParams params, SolrQueryRequest req) {
     if (graphQueryFilterSpec != null) {
-      NamedList tmp = graphQueryFilterSpec;
+      NamedList<?> tmp = graphQueryFilterSpec;
       graphQueryFilterSpec = null;
       graphQueryFilter = initGraphQueryFilter(tmp, req.getCore().getResourceLoader());
     }
