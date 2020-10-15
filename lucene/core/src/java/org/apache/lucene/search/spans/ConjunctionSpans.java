@@ -41,8 +41,6 @@ abstract class ConjunctionSpans extends Spans {
   /**
    * filters are used to restrict the domain of the conjunction DISI, but are *not* intended to be
    * evaluated by matches() or twoPhaseCurrentDocMatches()
-   * @param subSpans
-   * @param filters 
    */
   ConjunctionSpans(List<Spans> subSpans, List<Spans> filters) {
     if (subSpans.size() < 2) {

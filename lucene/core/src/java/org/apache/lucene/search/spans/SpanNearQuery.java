@@ -274,7 +274,7 @@ public class SpanNearQuery extends SpanQuery implements Cloneable {
 
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode, boolean allowOverlap,
       int combineRepeatGroupsThreshold, boolean supportVariableTermSpansLength, String shingleFieldSuffix, Set<BytesRef> shingles) {
-    this(clausesIn, slop, inOrder, comboMode, allowOverlap, combineRepeatGroupsThreshold, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, shingleFieldSuffix, shingles, DEFAULT_LEGACY_IMPLEMENTATION, DEFAULT_LOOP_IMPLEMENTATION);
+    this(clausesIn, slop, inOrder, comboMode, allowOverlap, combineRepeatGroupsThreshold, supportVariableTermSpansLength, shingleFieldSuffix, shingles, DEFAULT_LEGACY_IMPLEMENTATION, DEFAULT_LOOP_IMPLEMENTATION);
   }
   public SpanNearQuery(SpanQuery[] clausesIn, int slop, boolean inOrder, ComboMode comboMode, boolean allowOverlap, int combineRepeatGroupsThreshold) {
     this(clausesIn, slop, inOrder, comboMode, allowOverlap, combineRepeatGroupsThreshold, DEFAULT_SUPPORT_VARIABLE_TERM_SPANS_LENGTH, null, null, DEFAULT_LEGACY_IMPLEMENTATION, DEFAULT_LOOP_IMPLEMENTATION);

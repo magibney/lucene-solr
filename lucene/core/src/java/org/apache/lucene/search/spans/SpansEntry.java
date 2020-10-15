@@ -82,8 +82,9 @@ final class SpansEntry implements Comparable<SpansEntry> {
         return subSpans[0].startPosition();
       case PER_POSITION:
         return startPosition;
+      default:
+        return Spans.NO_MORE_POSITIONS;
     }
-    return Spans.NO_MORE_POSITIONS;
   }
 
   public int endPosition() {
@@ -92,8 +93,9 @@ final class SpansEntry implements Comparable<SpansEntry> {
         return subSpans[lastIndex].endPosition();
       case PER_POSITION:
         return endPosition;
+      default:
+        return Spans.NO_MORE_POSITIONS;
     }
-    return Spans.NO_MORE_POSITIONS;
   }
 
   public void collect(SpanCollector collector) throws IOException {
@@ -105,6 +107,8 @@ final class SpansEntry implements Comparable<SpansEntry> {
         return;
       case TYPE_NO_MORE_SPANS:
         throw new IllegalStateException("spans.collect() called when positioned past end of content for document");
+      default:
+        break;
     }
     if (backing != null) {
       switch (comboMode) {

@@ -362,6 +362,7 @@ public class PositionDeque implements Iterable<Spans> {
 
   }
 
+  @SuppressWarnings("IterableAndIterator") // TODO: do we care to remove this?
   private static abstract class LocalArrayList<E> implements Iterator<E>, Collection<E> {
 
     private int iterIdx = -1;
@@ -890,6 +891,9 @@ public class PositionDeque implements Iterable<Spans> {
             }
             return;
           }
+          break;
+        default:
+          break;
       }
       addToBySlopRemaining(bySlopRemaining, node, maxSlopRemainingToStart + slopRemainingToEnd);
     }
@@ -1098,6 +1102,8 @@ public class PositionDeque implements Iterable<Spans> {
               } while ((endNodeLink = endNodeLink.next) != anchor);
               anchor.clear();
               break;
+            default:
+              break;
           }
           n.maxSlopRemainingEndNodeLink.remove();
           n.maxSlopRemainingEndNodeLink = null;
@@ -1110,7 +1116,6 @@ public class PositionDeque implements Iterable<Spans> {
   /**
    * In preparation for the deletion of the specified Node n, delete links from subsequent phrase positions that refer
    * back to the specified Node. Recursively prune any subsequent node that *only* refers back to the specified Node.
-   * @param n 
    */
   private void deleteBacklinks(final int initialPhraseIndex, final DeleteBacklinksStackFrame[] frames) {
     //System.err.println("delete backlinks to node "+n+"["+n.deque.phraseIndex+"]");
@@ -1280,6 +1285,9 @@ public class PositionDeque implements Iterable<Spans> {
                 } while ((endNodeLink = endNodeLink.prev) != anchor);
                 sn.revisitEndNode = revisitFromEndNode;
               }
+              break;
+            default:
+              break;
           }
           int slopToChild = remainingSlopToStart - gapToChild;
           if (slopToChild > child.maxSlopRemainingToStart) {
@@ -1425,17 +1433,6 @@ public class PositionDeque implements Iterable<Spans> {
    * Recursive (phrase-position-per-level) method for building Spans-transverse links for slop-valid phrase paths.
    * This performs a depth-first traversal of the graph, caching paths where possible to avoid re-traversal of
    * sub-graphs (to end) that have been full explored (for the given input slop available).
-   * 
-   * @param caller
-   * @param hardMinStart
-   * @param softMinStart
-   * @param startCeiling
-   * @param minEnd
-   * @param remainingSlopToCaller
-   * @param comboMode
-   * @param passId
-   * @return
-   * @throws IOException 
    */
   @SuppressWarnings("fallthrough")
   private int buildLattice(final Node caller, final int hardMinStart, final int softMinStart, final int startCeiling, final int minEnd, final int remainingSlopToCaller, final ComboMode comboMode, final int passId, final boolean[] hasMatch) throws IOException {
@@ -1629,6 +1626,9 @@ public class PositionDeque implements Iterable<Spans> {
                   } while ((endNodeLink = endNodeLink.prev) != anchor);
                   linkFromCaller.revisitEndNode = revisitFromEndNode;
                 }
+                break;
+              default:
+                break;
             }
           }
           if (leastSloppyPathToPhraseEnd == null || maxSlopRemainingCandidate > maxSlopRemainingToPhraseEnd) {
@@ -1947,6 +1947,9 @@ public class PositionDeque implements Iterable<Spans> {
                     } while ((endNodeLink = endNodeLink.prev) != anchor);
                     linkFromCaller.revisitEndNode = revisitFromEndNode;
                   }
+                  break;
+                default:
+                  break;
               }
             }
             if (f.leastSloppyPathToPhraseEnd == null || f.maxSlopRemainingCandidate > f.maxSlopRemainingToPhraseEnd) {
@@ -2116,10 +2119,6 @@ public class PositionDeque implements Iterable<Spans> {
    * Based on indexed data (if available), determine whether it is possible for subsequent positions to expose new
    * match possibilities (and thus, whether to continue advancing in search of a(nother) match). Determine based on
    * state (whether a match has been found) and configuration whether to continue searching for a(nother) match.
-   * 
-   * @param extantWidth
-   * @param noMatchYet
-   * @return 
    */
   private int checkForIncreasedMatchLength(int extantWidth, boolean noMatchYet, boolean checkForDecreasedEnd) throws IOException {
     if (comboMode == ComboMode.GREEDY_END_POSITION && !noMatchYet) {
@@ -3325,6 +3324,8 @@ public class PositionDeque implements Iterable<Spans> {
           provisionalRepeat = 0;
           lastProvisionalIndex = head;
         }
+        break;
+      default:
         break;
     }
     final Node ret;
