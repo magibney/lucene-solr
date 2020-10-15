@@ -143,14 +143,14 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
       if (indexLookahead(fieldState.payloadAttribute)) {
         stateBuffer.put(termID, captureInvertFieldState.captureState(fieldState, true, null));
       } else {
-        initStreamSlices(termID, docID);
+        initStreamSlices(termID);
         newTerm(termID, docID);
       }
     } else if (indexLookahead == IndexLookahead.TRUE) {
       final CapturedFieldInvertState.State previousState = stateBuffer.get(termID = ~termID);
       if (previousState != null
           && previousState.firstInSegment) {
-        initStreamSlices(termID, docID);
+        initStreamSlices(termID);
         CapturedFieldInvertState.State newState = captureInvertFieldState.captureState(fieldState, false, previousState);
         stateBuffer.put(termID, newState);
         previousState.restoreState(fieldState, newState.position, false);
@@ -264,7 +264,7 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
     int termID = bytesHash.add(termBytes);
     //System.out.println("add term=" + termBytesRef.utf8ToString() + " doc=" + docState.docID + " termID=" + termID);
 
-    termID = addInternal(termID);
+    termID = addInternal(termID, docID);
 
     if (doNextCall) {
       nextPerField.add(postingsArray.textStarts[termID], docID);
@@ -378,7 +378,7 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
     for (int i = 0; i < Integer.BYTES; i++) {
       writeByte(stream, ++testByte);
     }
-    int candidateUpto = intUptos[intUptoStart + stream];
+    int candidateUpto = termStreamAddressBuffer[streamAddressOffset + stream];
     final BytesRef firstSlice = fieldState.firstMaxPositionLengthSlice;
     firstSlice.bytes = bytePool.buffers[candidateUpto >> ByteBlockPool.BYTE_BLOCK_SHIFT];
     firstSlice.offset = (candidateUpto & ByteBlockPool.BYTE_BLOCK_MASK) - Integer.BYTES;
@@ -386,7 +386,7 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
     // now we have to write 3 more bytes to in case the bytepool shifts the space we already allocated
     for (int i = 1; i <= OVERHEAD_TO_ENSURE_STABLE_ADDRESS; i++) {
       writeByte(stream, (byte)0);
-      final int probeUpto = intUptos[intUptoStart + stream];
+      final int probeUpto = termStreamAddressBuffer[streamAddressOffset + stream];
       if (probeUpto > candidateUpto + i) {
         // spread across 2 slices
         final BytesRef secondSlice = fieldState.secondMaxPositionLengthSlice;
@@ -394,16 +394,16 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
         secondSlice.offset = (probeUpto & ByteBlockPool.BYTE_BLOCK_MASK) - Integer.BYTES;
         secondSlice.length = Integer.BYTES - i;
         firstSlice.length = i;
-        intUptos[intUptoStart + stream] -= i;
+        termStreamAddressBuffer[streamAddressOffset + stream] -= i;
         return;
       }
     }
-    intUptos[intUptoStart + stream] -= OVERHEAD_TO_ENSURE_STABLE_ADDRESS;
+    termStreamAddressBuffer[streamAddressOffset + stream] -= OVERHEAD_TO_ENSURE_STABLE_ADDRESS;
     // stable all in one slice
     firstSlice.length = Integer.BYTES;
   }
 
-  void flush() throws IOException {
+  void flush(int docID) throws IOException {
     if (indexLookahead == IndexLookahead.FALSE) {
       return;
     }
@@ -418,7 +418,7 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
       } else {
         positionStreamSlice(termID);
         previousState.restoreState(fieldState, Integer.MAX_VALUE, true);
-        addTerm(termID);
+        addTerm(termID, docID);
       }
     }
     // reset
@@ -426,7 +426,7 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
     stateBuffer.clear();
     maxPosLen = 0;
     if (doNextCall) {
-      nextPerField.flush();
+      nextPerField.flush(docID);
     }
   }
 

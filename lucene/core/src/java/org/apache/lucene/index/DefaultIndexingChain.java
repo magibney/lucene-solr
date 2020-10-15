@@ -468,7 +468,7 @@ final class DefaultIndexingChain extends DocConsumer {
       if (docWriter.hasHitAbortingException() == false) {
         // Finish each indexed field name seen in the document:
         for (int i=0;i<fieldCount;i++) {
-          fields[i].termsHashPerField.flush();
+          fields[i].termsHashPerField.flush(docID);
           fields[i].finish(docID);//nocommit: can we use this now to obviate .flush() above?
         }
         finishStoredFields();

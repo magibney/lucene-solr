@@ -39,6 +39,11 @@ public class PositionLengthOrderTokenFilterFactory extends TokenFilterFactory {
     this.indexLookahead = tmp == null ? INDEX_LOOKAHEAD_DEFAULT : Boolean.parseBoolean(tmp);
   }
 
+  /** Default ctor for compatibility with SPI */
+  public PositionLengthOrderTokenFilterFactory() {
+    throw defaultCtorException();
+  }
+
   @Override
   public TokenStream create(TokenStream input) {
     return new PositionLengthOrderTokenFilter(input, indexLookahead);
