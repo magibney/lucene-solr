@@ -1604,7 +1604,6 @@ public class TestSpanCollection extends LuceneTestCase {
    * here we test the case where the token "ill" is indexed with
    * varying position lengths, and can make certain non-matching queries
    * become matching, iff supportVariableTermSpansLength == true
-   * @throws Exception
    */
   public void testVariableTermSpanLength() throws Exception {
     if (NARROW) return;
