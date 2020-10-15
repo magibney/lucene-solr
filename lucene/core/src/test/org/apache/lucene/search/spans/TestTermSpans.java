@@ -166,7 +166,7 @@ public class TestTermSpans extends LuceneTestCase {
               | WordDelimiterGraphFilter.PRESERVE_ORIGINAL
               | WordDelimiterGraphFilter.CATENATE_WORDS,
               CharArraySet.EMPTY_SET);
-          filter = new FlattenGraphFilterFactory(Collections.EMPTY_MAP).create(filter);
+          filter = new FlattenGraphFilterFactory(Collections.emptyMap()).create(filter);
           filter = new PositionLengthOrderTokenFilter(filter, ENCODE_LOOKAHEAD);
           return new TokenStreamComponents(components.getSource(), filter);
         default:
