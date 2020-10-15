@@ -47,6 +47,9 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
 
   private static final int HASH_INIT_SIZE = 4;
 
+  // the following is only needed for IndexLookahead; there is certainly a better way to do this
+  private final FieldInvertState fieldState;
+
   private final TermsHashPerField nextPerField;
   private final IntBlockPool intPool;
   final ByteBlockPool bytePool;
@@ -69,7 +72,7 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
 
   /** streamCount: how many streams this field stores per term.
    * E.g. doc(+freq) is 1 stream, prox+offset is a second. */
-  TermsHashPerField(int streamCount, IntBlockPool intPool, ByteBlockPool bytePool, ByteBlockPool termBytePool,
+  TermsHashPerField(int streamCount, FieldInvertState fieldState, IntBlockPool intPool, ByteBlockPool bytePool, ByteBlockPool termBytePool,
                     Counter bytesUsed, TermsHashPerField nextPerField, String fieldName, IndexOptions indexOptions) {
     this.intPool = intPool;
     this.bytePool = bytePool;
@@ -80,6 +83,10 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
     this.indexOptions = indexOptions;
     PostingsBytesStartArray byteStarts = new PostingsBytesStartArray(this, bytesUsed);
     bytesHash = new BytesRefHash(termBytePool, HASH_INIT_SIZE, byteStarts);
+    this.fieldState = fieldState;
+    if (fieldState == null) {
+      this.indexLookahead = IndexLookahead.FALSE;
+    }
   }
 
   void reset() {
@@ -140,7 +147,7 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
     if (termID >= 0) {      // New posting
       // First time we are seeing this token since we last
       // flushed the hash.
-      if (indexLookahead(fieldState.payloadAttribute)) {
+      if (indexLookahead == IndexLookahead.TRUE || (indexLookahead != IndexLookahead.FALSE && indexLookahead(fieldState.payloadAttribute))) {
         stateBuffer.put(termID, captureInvertFieldState.captureState(fieldState, true, null));
       } else {
         initStreamSlices(termID);
@@ -183,39 +190,32 @@ abstract class TermsHashPerField implements Comparable<TermsHashPerField> {
   protected IndexLookahead indexLookahead = IndexLookahead.UNINITIALZED;
 
   protected boolean indexLookahead(PayloadAttribute payloadAtt) {
-    switch (indexLookahead) {
-      case TRUE:
-        return true;
-      case FALSE:
+    if (payloadAtt == null) {
+      indexLookahead = IndexLookahead.FALSE;
+      return false;
+    } else {
+      BytesRef payload = payloadAtt.getPayload();
+      if (payload == null || payload.length - payload.offset < MAGIC_NUMBER.length) {
+        indexLookahead = IndexLookahead.FALSE;
         return false;
-      default:
-        if (payloadAtt == null) {
-          indexLookahead = IndexLookahead.FALSE;
-          return false;
-        } else {
-          BytesRef payload = payloadAtt.getPayload();
-          if (payload == null || payload.length - payload.offset < MAGIC_NUMBER.length) {
+      } else {
+        final byte[] payloadBytes = payload.bytes;
+        int compareIdx = payload.offset;
+        for (int i = 0; i < MAGIC_STABLE_LENGTH; i++) {
+          if (MAGIC_NUMBER[i] != payloadBytes[compareIdx++]) {
             indexLookahead = IndexLookahead.FALSE;
             return false;
-          } else {
-            final byte[] payloadBytes = payload.bytes;
-            int compareIdx = payload.offset;
-            for (int i = 0; i < MAGIC_STABLE_LENGTH; i++) {
-              if (MAGIC_NUMBER[i] != payloadBytes[compareIdx++]) {
-                indexLookahead = IndexLookahead.FALSE;
-                return false;
-              }
-            }
-            switch (payloadBytes[MAGIC_STABLE_LENGTH]) {
-              case ENCODE_LOOKAHEAD:
-                indexLookahead = IndexLookahead.TRUE;
-                return true;
-              default:
-                indexLookahead = IndexLookahead.FALSE;
-                return false;
-            }
           }
         }
+        switch (payloadBytes[MAGIC_STABLE_LENGTH]) {
+          case ENCODE_LOOKAHEAD:
+            indexLookahead = IndexLookahead.TRUE;
+            return true;
+          default:
+            indexLookahead = IndexLookahead.FALSE;
+            return false;
+        }
+      }
     }
   }
 

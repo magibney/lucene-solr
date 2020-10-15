@@ -46,7 +46,7 @@ final class TermVectorsConsumerPerField extends TermsHashPerField {
   private boolean hasPayloads; // if enabled, and we actually saw any for this field
 
   TermVectorsConsumerPerField(FieldInvertState invertState, TermVectorsConsumer termsHash, FieldInfo fieldInfo) {
-    super(2, termsHash.intPool, termsHash.bytePool, termsHash.termBytePool, termsHash.bytesUsed, null, fieldInfo.name, fieldInfo.getIndexOptions());
+    super(2, invertState, termsHash.intPool, termsHash.bytePool, termsHash.termBytePool, termsHash.bytesUsed, null, fieldInfo.name, fieldInfo.getIndexOptions());
     this.termsWriter = termsHash;
     this.fieldInfo = fieldInfo;
     this.fieldState = invertState;

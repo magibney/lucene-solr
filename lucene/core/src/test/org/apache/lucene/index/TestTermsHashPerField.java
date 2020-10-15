@@ -42,7 +42,7 @@ public class TestTermsHashPerField extends LuceneTestCase  {
     ByteBlockPool byteBlockPool = new ByteBlockPool(new ByteBlockPool.DirectAllocator());
     ByteBlockPool termBlockPool = new ByteBlockPool(new ByteBlockPool.DirectAllocator());
 
-    TermsHashPerField hash = new TermsHashPerField(1, intBlockPool, byteBlockPool, termBlockPool, Counter.newCounter(),
+    TermsHashPerField hash = new TermsHashPerField(1, null, intBlockPool, byteBlockPool, termBlockPool, Counter.newCounter(),
         null, "testfield", IndexOptions.DOCS_AND_FREQS) {
 
       private FreqProxTermsWriterPerField.FreqProxPostingsArray freqProxPostingsArray;
