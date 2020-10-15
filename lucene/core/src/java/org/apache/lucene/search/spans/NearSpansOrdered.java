@@ -577,6 +577,7 @@ public class NearSpansOrdered extends ConjunctionSpans implements IndexLookahead
      * this value should be discarded forever.
      * @return 
      */
+    @SuppressWarnings("fallthrough")
     public int nextMatch(int hardMinStart, int softMinStart, int startCeiling, int minEnd) throws IOException {
       if (uninitializedForDoc) {
         uninitializedForDoc = false;

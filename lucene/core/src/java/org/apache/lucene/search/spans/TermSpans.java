@@ -139,6 +139,7 @@ public class TermSpans extends Spans implements IndexLookahead {
   private int lookaheadNextStartPositionFloor = UNINITIALIZED_AT_SPANS;
 
   @Override
+  @SuppressWarnings("fallthrough")
   public int lookaheadNextStartPositionFloor() throws IOException {
     boolean recurseOnce;
     pseudoRecurse:

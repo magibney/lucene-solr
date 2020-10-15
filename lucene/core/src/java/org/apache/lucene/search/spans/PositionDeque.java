@@ -871,6 +871,7 @@ public class PositionDeque implements Iterable<Spans> {
         forSlopRemaining.add(node);
     }
     
+    @SuppressWarnings("fallthrough")
     private void conditionalAddToBySlopRemaining(final Node node, final int maxSlopRemainingToStart, final int slopRemainingToEnd) {
       switch (comboMode) {
         case FULL_DISTILLED_PER_START_POSITION:
@@ -1436,6 +1437,7 @@ public class PositionDeque implements Iterable<Spans> {
    * @return
    * @throws IOException 
    */
+  @SuppressWarnings("fallthrough")
   private int buildLattice(final Node caller, final int hardMinStart, final int softMinStart, final int startCeiling, final int minEnd, final int remainingSlopToCaller, final ComboMode comboMode, final int passId, final boolean[] hasMatch) throws IOException {
     //System.err.println("here["+phraseIndex+"]!! "+caller+", "+softMinStart+", "+startCeiling+", "+remainingSlopToCaller+" ("+lstToString()+")");
     final int previousMaxSlopToCaller = caller.maxSlopToCaller;
@@ -1772,6 +1774,7 @@ public class PositionDeque implements Iterable<Spans> {
     return true;
   }
 
+  @SuppressWarnings("fallthrough")
   private static int buildLatticeLoop(final int allowedSlop, final ComboMode comboMode, final boolean greedyReturn, final int passId, final StackFrame[] frames, final Node root) throws IOException {
     int phraseIndex = 0;
     boolean hasMatch = false;
