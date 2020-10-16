@@ -49,7 +49,6 @@ import org.eclipse.jetty.servlet.ServletHolder;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
-import org.restlet.ext.servlet.ServerServlet;
 
 /**
  * Test the functionality (accuracy and failure) of the methods exposed by the classes
@@ -66,6 +65,7 @@ public class SchemaTest extends RestTestBase {
     SimpleOrderedMap errorMap = (SimpleOrderedMap)e.getMetaData().get("error");
     assertEquals("org.apache.solr.api.ApiBag$ExceptionWithErrObject",
         ((NamedList)errorMap.get("metadata")).get("error-class"));
+    @SuppressWarnings({"rawtypes"})
     List details = (List)errorMap.get("details");
     assertTrue(((List)((Map)details.get(0)).get("errorMessages")).get(0).toString().contains(expectedErrorMessage));
   }
@@ -105,9 +105,6 @@ public class SchemaTest extends RestTestBase {
     FileUtils.copyDirectory(new File(getFile("solrj/solr/collection1").getParent()), tmpSolrHome.getAbsoluteFile());
 
     final SortedMap<ServletHolder, String> extraServlets = new TreeMap<>();
-    final ServletHolder solrRestApi = new ServletHolder("SolrSchemaRestApi", ServerServlet.class);
-    solrRestApi.setInitParameter("org.restlet.application", "org.apache.solr.rest.SolrSchemaRestApi");
-    extraServlets.put(solrRestApi, "/schema/*");  // '/schema/*' matches '/schema', '/schema/', and '/schema/whatever...'
 
     System.setProperty("managed.schema.mutable", "true");
     System.setProperty("enable.update.log", "false");

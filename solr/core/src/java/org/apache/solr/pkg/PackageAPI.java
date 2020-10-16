@@ -60,9 +60,10 @@ import static org.apache.solr.security.PermissionNameProvider.Name.PACKAGE_READ_
  *
  */
 public class PackageAPI {
-  public static final String PACKAGES = "packages";
   public final boolean enablePackages = Boolean.parseBoolean(System.getProperty("enable.packages", "false"));
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
+
+  public static final String ERR_MSG = "Package loading is not enabled , Start your nodes with -Denable.packages=true";
 
   final CoreContainer coreContainer;
   private final ObjectMapper mapper = SolrJacksonAnnotationInspector.createObjectMapper();
@@ -92,8 +93,7 @@ public class PackageAPI {
 
   private void registerListener(SolrZkClient zkClient)
       throws KeeperException, InterruptedException {
-    String path = SOLR_PKGS_PATH;
-    zkClient.exists(path,
+    zkClient.exists(SOLR_PKGS_PATH,
         new Watcher() {
 
           @Override
@@ -102,32 +102,33 @@ public class PackageAPI {
             if (Event.EventType.None.equals(event.getType())) {
               return;
             }
-            try {
-              synchronized (this) {
-                log.debug("Updating [{}] ... ", path);
-
-                // remake watch
-                final Watcher thisWatch = this;
-                final Stat stat = new Stat();
-                final byte[] data = zkClient.getData(path, thisWatch, stat, true);
-                pkgs = readPkgsFromZk(data, stat);
-                packageLoader.refreshPackageConf();
-              }
-            } catch (KeeperException.ConnectionLossException | KeeperException.SessionExpiredException e) {
-              log.warn("ZooKeeper watch triggered, but Solr cannot talk to ZK: [{}]", e.getMessage());
-            } catch (KeeperException e) {
-              log.error("A ZK error has occurred", e);
-              throw new ZooKeeperException(SolrException.ErrorCode.SERVER_ERROR, "", e);
-            } catch (InterruptedException e) {
-              // Restore the interrupted status
-              Thread.currentThread().interrupt();
-              log.warn("Interrupted", e);
+            synchronized (this) {
+              log.debug("Updating [{}] ... ", SOLR_PKGS_PATH);
+              // remake watch
+              final Watcher thisWatch = this;
+              refreshPackages(thisWatch);
             }
           }
-
         }, true);
   }
 
+  public void refreshPackages(Watcher watcher)  {
+    final Stat stat = new Stat();
+    try {
+      final byte[] data = coreContainer.getZkController().getZkClient().getData(SOLR_PKGS_PATH, watcher, stat, true);
+      pkgs = readPkgsFromZk(data, stat);
+      packageLoader.refreshPackageConf();
+    } catch (KeeperException.ConnectionLossException | KeeperException.SessionExpiredException e) {
+      log.warn("ZooKeeper watch triggered, but Solr cannot talk to ZK: ", e);
+    } catch (KeeperException e) {
+      log.error("A ZK error has occurred", e);
+      throw new ZooKeeperException(SolrException.ErrorCode.SERVER_ERROR, "", e);
+    } catch (InterruptedException e) {
+      // Restore the interrupted status
+      Thread.currentThread().interrupt();
+      log.warn("Interrupted", e);
+    }
+  }
 
   private Packages readPkgsFromZk(byte[] data, Stat stat) throws KeeperException, InterruptedException {
 
@@ -191,7 +192,7 @@ public class PackageAPI {
 
     public PkgVersion(Package.AddVersion addVersion) {
       this.version = addVersion.version;
-      this.files = addVersion.files;
+      this.files = addVersion.files == null? null : Collections.unmodifiableList(addVersion.files);
       this.manifest = addVersion.manifest;
       this.manifestSHA512 = addVersion.manifestSHA512;
     }
@@ -208,12 +209,26 @@ public class PackageAPI {
     }
 
     @Override
+    public int hashCode() {
+      return Objects.hash(version);
+    }
+
+    @Override
     public String toString() {
       try {
         return Utils.writeJson(this, new StringWriter(), false).toString() ;
       } catch (IOException e) {
         throw new RuntimeException(e);
       }
+    }
+
+    public PkgVersion copy() {
+      PkgVersion result = new PkgVersion();
+      result.version = this.version;
+      result.files =  this.files;
+      result.manifest =  this.manifest;
+      result.manifestSHA512 =  this.manifestSHA512;
+      return result;
     }
   }
 
@@ -224,7 +239,7 @@ public class PackageAPI {
   public class Edit {
 
     @Command(name = "refresh")
-    public void refresh(SolrQueryRequest req, SolrQueryResponse rsp, PayloadObj<String> payload) {
+    public void refresh(PayloadObj<String> payload) {
       String p = payload.get();
       if (p == null) {
         payload.addError("Package null");
@@ -242,13 +257,10 @@ public class PackageAPI {
             coreContainer.getZkController().zkStateReader.getBaseUrlForNodeName(s).replace("/solr", "/api") + "/cluster/package?wt=javabin&omitHeader=true&refreshPackage=" + p,
             Utils.JAVABINCONSUMER);
       }
-
-
     }
 
-
     @Command(name = "add")
-    public void add(SolrQueryRequest req, SolrQueryResponse rsp, PayloadObj<Package.AddVersion> payload) {
+    public void add(PayloadObj<Package.AddVersion> payload) {
       if (!checkEnabled(payload)) return;
       Package.AddVersion add = payload.get();
       if (add.files.isEmpty()) {
@@ -269,8 +281,15 @@ public class PackageAPI {
             log.error("Error deserializing packages.json", e);
             packages = new Packages();
           }
-          packages.packages.computeIfAbsent(add.pkg, Utils.NEW_ARRAYLIST_FUN).add(new PkgVersion(add));
-          packages.znodeVersion = stat.getVersion() ;
+          List<PkgVersion> list = packages.packages.computeIfAbsent(add.pkg, o -> new ArrayList<PkgVersion>());
+          for (PkgVersion version : list) {
+            if (Objects.equals(version.version, add.version)) {
+              payload.addError("Version '" + add.version + "' exists already");
+              return null;
+            }
+          }
+          list.add(new PkgVersion(add));
+          packages.znodeVersion = stat.getVersion() + 1;
           finalState[0] = packages;
           return Utils.toJSON(packages);
         });
@@ -288,7 +307,7 @@ public class PackageAPI {
     }
 
     @Command(name = "delete")
-    public void del(SolrQueryRequest req, SolrQueryResponse rsp, PayloadObj<Package.DelVersion> payload) {
+    public void del(PayloadObj<Package.DelVersion> payload) {
       if (!checkEnabled(payload)) return;
       Package.DelVersion delVersion = payload.get();
       try {
@@ -331,22 +350,25 @@ public class PackageAPI {
 
   }
 
+  public boolean isEnabled() {
+    return enablePackages;
+  }
+
   private boolean checkEnabled(CommandOperation payload) {
     if (!enablePackages) {
-      payload.addError("Package loading is not enabled , Start your nodes with -Denable.packages=true");
+      payload.addError(ERR_MSG);
       return false;
     }
     return true;
   }
 
-  @EndPoint(
-      method = SolrRequest.METHOD.GET,
-      path = {"/cluster/package/",
-          "/cluster/package/{name}"},
-      permission = PACKAGE_READ_PERM
-  )
   public class Read {
-    @Command()
+    @EndPoint(
+        method = SolrRequest.METHOD.GET,
+        path = {"/cluster/package/",
+            "/cluster/package/{name}"},
+        permission = PACKAGE_READ_PERM
+    )
     public void get(SolrQueryRequest req, SolrQueryResponse rsp) {
       String refresh = req.getParams().get("refreshPackage");
       if (refresh != null) {
@@ -406,5 +428,22 @@ public class PackageAPI {
     log.error("Error reading package config from zookeeper", SolrZkClient.checkInterrupted(e));
   }
 
-
+  public boolean isJarInuse(String path) {
+    Packages pkg = null;
+    try {
+      pkg = readPkgsFromZk(null, null);
+    } catch (KeeperException.NoNodeException nne) {
+      return false;
+    } catch (InterruptedException | KeeperException e) {
+      throw new SolrException(SolrException.ErrorCode.SERVER_ERROR, e);
+    }
+    for (List<PkgVersion> vers : pkg.packages.values()) {
+      for (PkgVersion ver : vers) {
+        if (ver.files.contains(path)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
 }

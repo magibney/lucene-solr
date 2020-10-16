@@ -27,7 +27,10 @@ import static org.apache.solr.client.solrj.cloud.autoscaling.Clause.TestStatus.N
 import static org.apache.solr.client.solrj.cloud.autoscaling.Clause.TestStatus.PASS;
 import static org.apache.solr.client.solrj.cloud.autoscaling.Policy.ANY;
 
-
+/**
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
+ */
 public enum Operand {
   WILDCARD(ANY, Integer.MAX_VALUE) {
     @Override
@@ -80,6 +83,7 @@ public enum Operand {
   IN("", 0) {
     @Override
     public TestStatus match(Object ruleVal, Object testVal) {
+      @SuppressWarnings({"rawtypes"})
       List l = (List) ruleVal;
       return (l.contains(testVal)) ?  PASS: FAIL;
     }

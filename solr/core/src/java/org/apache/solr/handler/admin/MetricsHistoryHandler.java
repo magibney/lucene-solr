@@ -91,7 +91,7 @@ import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.response.SolrQueryResponse;
 import org.apache.solr.security.AuthorizationContext;
 import org.apache.solr.security.PermissionNameProvider;
-import org.apache.solr.util.DefaultSolrThreadFactory;
+import org.apache.solr.common.util.SolrNamedThreadFactory;
 import org.apache.zookeeper.KeeperException;
 import org.rrd4j.ConsolFun;
 import org.rrd4j.DsType;
@@ -185,6 +185,7 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
     }
     // override from ZK if available
     if (cloudManager != null) {
+      @SuppressWarnings({"unchecked"})
       Map<String, Object> props = (Map<String, Object>)cloudManager.getClusterStateProvider()
           .getClusterProperty("metrics", Collections.emptyMap())
           .getOrDefault("history", Collections.emptyMap());
@@ -207,8 +208,6 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
     this.metricsHandler = metricsHandler;
     this.cloudManager = cloudManager;
     this.timeSource = cloudManager != null ? cloudManager.getTimeSource() : TimeSource.NANO_TIME;
-    factory = new SolrRrdBackendFactory(solrClient, CollectionAdminParams.SYSTEM_COLL,
-            syncPeriod, this.timeSource);
 
     counters.put(Group.core.toString(), DEFAULT_CORE_COUNTERS);
     counters.put(Group.node.toString(), Collections.emptyList());
@@ -228,8 +227,11 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
     }
 
     if (enable) {
+      factory = new SolrRrdBackendFactory(solrClient, CollectionAdminParams.SYSTEM_COLL,
+              syncPeriod, this.timeSource);
+
       collectService = (ScheduledThreadPoolExecutor) Executors.newScheduledThreadPool(1,
-          new DefaultSolrThreadFactory("MetricsHistoryHandler"));
+          new SolrNamedThreadFactory("MetricsHistoryHandler"));
       collectService.setRemoveOnCancelPolicy(true);
       collectService.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
       collectService.scheduleWithFixedDelay(() -> collectMetrics(),
@@ -237,6 +239,8 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
           timeSource.convertDelay(TimeUnit.SECONDS, collectPeriod, TimeUnit.MILLISECONDS),
           TimeUnit.MILLISECONDS);
       checkSystemCollection();
+    } else {
+      factory = null;
     }
   }
 
@@ -252,7 +256,7 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
         DocCollection systemColl = clusterState.getCollectionOrNull(CollectionAdminParams.SYSTEM_COLL);
         if (systemColl == null) {
           if (logMissingCollection) {
-            log.info("No " + CollectionAdminParams.SYSTEM_COLL + " collection, keeping metrics history in memory.");
+            log.info("No {} collection, keeping metrics history in memory.", CollectionAdminParams.SYSTEM_COLL);
             logMissingCollection = false;
           }
           factory.setPersistent(false);
@@ -266,7 +270,7 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
             }
           }
           if (!ready) {
-            log.debug(CollectionAdminParams.SYSTEM_COLL + "collection not ready yet, keeping metrics history in memory");
+            log.debug("{} collection not ready yet, keeping metrics history in memory", CollectionAdminParams.SYSTEM_COLL);
             factory.setPersistent(false);
             return;
           }
@@ -288,7 +292,7 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
         logMissingCollection = true;
       } catch (Exception e) {
         if (logMissingCollection) {
-          log.info("No " + CollectionAdminParams.SYSTEM_COLL + " collection, keeping metrics history in memory.");
+          log.info("No {} collection, keeping metrics history in memory.", CollectionAdminParams.SYSTEM_COLL);
         }
         logMissingCollection = false;
         factory.setPersistent(false);
@@ -341,7 +345,7 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
     try {
       nodeName = LeaderElector.getNodeName(oid);
     } catch (Exception e) {
-      log.warn("Unknown format of leader id, skipping: " + oid, e);
+      log.warn("Unknown format of leader id, skipping: {}", oid, e);
       return null;
     }
     return nodeName;
@@ -379,6 +383,7 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
     ExecutorUtil.setServerThreadFlag(false);
   }
 
+  @SuppressWarnings({"unchecked", "rawtypes"})
   private void collectLocalReplicaMetrics() {
     List<Group> groups = new ArrayList<>();
     if (enableNodes) {
@@ -392,7 +397,7 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
       if (Thread.interrupted()) {
         return;
       }
-      log.debug("--  collecting local " + group + "...");
+      log.debug("--  collecting local {}...", group);
       ModifiableSolrParams params = new ModifiableSolrParams();
       params.add(MetricsHandler.GROUP_PARAM, group.toString());
       params.add(MetricsHandler.COMPACT_PARAM, "true");
@@ -650,20 +655,10 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
 
   @Override
   public void close() {
-    log.debug("Closing " + hashCode());
-    if (collectService != null) {
-      boolean shutdown = false;
-      while (!shutdown) {
-        try {
-          // Wait a while for existing tasks to terminate
-          collectService.shutdownNow();
-          shutdown = collectService.awaitTermination(5, TimeUnit.SECONDS);
-        } catch (InterruptedException ie) {
-          // Preserve interrupt status
-          Thread.currentThread().interrupt();
-        }
-      }
+    if (log.isDebugEnabled()) {
+      log.debug("Closing {}", hashCode());
     }
+    ExecutorUtil.shutdownNowAndAwaitTermination(collectService);
     if (factory != null) {
       factory.close();
     }
@@ -798,6 +793,7 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
     rsp.getResponseHeader().add("zkConnected", cloudManager != null);
   }
 
+  @SuppressWarnings({"unchecked"})
   private NamedList<Object> handleRemoteRequest(String nodeName, SolrQueryRequest req) {
     String baseUrl = Utils.getBaseUrlForNodeName(nodeName, overseerUrlScheme);
     String url;
@@ -806,7 +802,7 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
       u = new URL(u.getProtocol(), u.getHost(), u.getPort(), "/api/cluster/metrics/history");
       url = u.toString();
     } catch (MalformedURLException e) {
-      log.warn("Invalid Overseer url '" + baseUrl + "', unable to fetch remote metrics history", e);
+      log.warn("Invalid Overseer url '{}', unable to fetch remote metrics history", baseUrl, e);
       return null;
     }
     // always use javabin
@@ -820,11 +816,12 @@ public class MetricsHistoryHandler extends RequestHandlerBase implements Permiss
         return (NamedList<Object>)codec.unmarshal(new ByteArrayInputStream(data));
       }
     } catch (IOException e) {
-      log.warn("Exception forwarding request to Overseer at " + url, e);
+      log.warn("Exception forwarding request to Overseer at {}", url, e);
       return null;
     }
   }
 
+  @SuppressWarnings({"unchecked", "rawtypes"})
   private void mergeRemoteRes(SolrQueryResponse rsp, NamedList<Object> remoteRes) {
     if (remoteRes == null || remoteRes.get("metrics") == null) {
       return;

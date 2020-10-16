@@ -50,6 +50,8 @@ import static org.apache.solr.common.params.AutoScalingParams.PREFERRED_OP;
 
 /**
  * Trigger for the {@link TriggerEventType#NODELOST} event
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 public class NodeLostTrigger extends TriggerBase {
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
@@ -82,7 +84,7 @@ public class NodeLostTrigger extends TriggerBase {
             return;
           }
         } catch (InterruptedException | IOException | KeeperException e) {
-          log.debug("-- ignoring marker " + markerPath + " state due to error", e);
+          log.debug("-- ignoring marker {} state due to error", markerPath, e);
         }
         // don't add nodes that have since came back
         if (!lastLiveNodes.contains(n) && !nodeNameVsTimeRemoved.containsKey(n)) {
@@ -143,10 +145,12 @@ public class NodeLostTrigger extends TriggerBase {
   protected void setState(Map<String, Object> state) {
     this.lastLiveNodes.clear();
     this.nodeNameVsTimeRemoved.clear();
+    @SuppressWarnings({"unchecked"})
     Collection<String> lastLiveNodes = (Collection<String>)state.get("lastLiveNodes");
     if (lastLiveNodes != null) {
       this.lastLiveNodes.addAll(lastLiveNodes);
     }
+    @SuppressWarnings({"unchecked"})
     Map<String,Long> nodeNameVsTimeRemoved = (Map<String,Long>)state.get("nodeNameVsTimeRemoved");
     if (nodeNameVsTimeRemoved != null) {
       this.nodeNameVsTimeRemoved.putAll(nodeNameVsTimeRemoved);
@@ -164,7 +168,9 @@ public class NodeLostTrigger extends TriggerBase {
       }
 
       Set<String> newLiveNodes = new HashSet<>(cloudManager.getClusterStateProvider().getLiveNodes());
-      log.debug("Running NodeLostTrigger: {} with currently live nodes: {} and last live nodes: {}", name, newLiveNodes.size(), lastLiveNodes.size());
+      if (log.isDebugEnabled()) {
+        log.debug("Running NodeLostTrigger: {} with currently live nodes: {} and last live nodes: {}", name, newLiveNodes.size(), lastLiveNodes.size());
+      }
       log.trace("Current Live Nodes for {}: {}", name, newLiveNodes);
       log.trace("Last Live Nodes for {}: {}", name, lastLiveNodes);
       

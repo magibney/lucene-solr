@@ -24,6 +24,8 @@ import org.apache.solr.common.params.CollectionParams;
 
 /**
  * This suggester produces a DELETENODE request using provided {@link org.apache.solr.client.solrj.cloud.autoscaling.Suggester.Hint#SRC_NODE}.
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 class DeleteNodeSuggester extends Suggester {
 
@@ -33,7 +35,9 @@ class DeleteNodeSuggester extends Suggester {
   }
 
   @Override
+  @SuppressWarnings({"rawtypes"})
   SolrRequest init() {
+    @SuppressWarnings({"unchecked"})
     Set<String> srcNodes = (Set<String>) hints.get(Hint.SRC_NODE);
     if (srcNodes.isEmpty()) {
       throw new RuntimeException("delete-node requires 'src_node' hint");

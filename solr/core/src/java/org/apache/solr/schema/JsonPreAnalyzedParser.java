@@ -137,7 +137,7 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
             try {
               tokenStart = Integer.parseInt(String.valueOf(obj));
             } catch (NumberFormatException nfe) {
-              log.warn("Invalid " + OFFSET_START_KEY + " attribute, skipped: '" + obj + "'");
+              log.warn("Invalid {} attribute, skipped: '{}'", OFFSET_START_KEY, obj);
               hasOffsetStart = false;
             }
           }
@@ -150,7 +150,7 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
             try {
               tokenEnd = Integer.parseInt(String.valueOf(obj));
             } catch (NumberFormatException nfe) {
-              log.warn("Invalid " + OFFSET_END_KEY + " attribute, skipped: '" + obj + "'");
+              log.warn("Invalid {} attribute, skipped: '{}'", OFFSET_END_KEY, obj);
               hasOffsetEnd = false;
             }
           }
@@ -163,7 +163,7 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
             try {
               posIncr = Integer.parseInt(String.valueOf(obj));
             } catch (NumberFormatException nfe) {
-              log.warn("Invalid " + POSINCR_KEY + " attribute, skipped: '" + obj + "'");
+              log.warn("Invalid {} attribute, skipped: '{}'", POSINCR_KEY, obj);
             }
           }
           PositionIncrementAttribute patt = parent.addAttribute(PositionIncrementAttribute.class);
@@ -221,13 +221,13 @@ public class JsonPreAnalyzedParser implements PreAnalyzedParser {
             FlagsAttribute flags = parent.addAttribute(FlagsAttribute.class);
             flags.setFlags(f);
           } catch (NumberFormatException nfe) {
-            log.warn("Invalid " + FLAGS_KEY + " attribute, skipped: '" + e.getValue() + "'");
+            log.warn("Invalid {} attribute, skipped: '{}'", FLAGS_KEY, e.getValue());
           }
         } else if (key.equals(TYPE_KEY)) {
           TypeAttribute tattr = parent.addAttribute(TypeAttribute.class);
           tattr.setType(String.valueOf(e.getValue()));
         } else {
-          log.warn("Unknown attribute, skipped: " + e.getKey() + "=" + e.getValue());
+          log.warn("Unknown attribute, skipped: {} = {}", e.getKey(), e.getValue());
         }
       }
       // handle offset attr

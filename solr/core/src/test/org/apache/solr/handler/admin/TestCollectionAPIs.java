@@ -40,6 +40,8 @@ import org.apache.solr.common.util.ContentStreamBase;
 import org.apache.solr.common.util.Pair;
 import org.apache.solr.common.util.Utils;
 import org.apache.solr.core.CoreContainer;
+import org.apache.solr.handler.ClusterAPI;
+import org.apache.solr.handler.CollectionsAPI;
 import org.apache.solr.request.LocalSolrQueryRequest;
 import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.response.SolrQueryResponse;
@@ -79,10 +81,17 @@ public class TestCollectionAPIs extends SolrTestCaseJ4 {
   }
 
   public void testCommands() throws Exception {
-    MockCollectionsHandler collectionsHandler = new MockCollectionsHandler();
-    ApiBag apiBag = new ApiBag(false);
-    Collection<Api> apis = collectionsHandler.getApis();
-    for (Api api : apis) apiBag.register(api, Collections.emptyMap());
+    ApiBag apiBag;
+    try (MockCollectionsHandler collectionsHandler = new MockCollectionsHandler()) {
+      apiBag = new ApiBag(false);
+      apiBag.registerObject(new CollectionsAPI(collectionsHandler));
+      Collection<Api> apis = collectionsHandler.getApis();
+      for (Api api : apis) apiBag.register(api, Collections.emptyMap());
+
+      ClusterAPI clusterAPI = new ClusterAPI(collectionsHandler,null);
+      apiBag.registerObject(clusterAPI);
+      apiBag.registerObject(clusterAPI.commands);
+    }
     //test a simple create collection call
     compareOutput(apiBag, "/collections", POST,
         "{create:{name:'newcoll', config:'schemaless', numShards:2, replicationFactor:2 }}", null,
@@ -199,6 +208,7 @@ public class TestCollectionAPIs extends SolrTestCaseJ4 {
                             final String payload, final CoreContainer cc, String expectedOutputMapJson) throws Exception {
     Pair<SolrQueryRequest, SolrQueryResponse> ctx = makeCall(apiBag, path, method, payload, cc);
     ZkNodeProps output = (ZkNodeProps) ctx.second().getValues().get(ZkNodeProps.class.getName());
+    @SuppressWarnings({"rawtypes"})
     Map expected = (Map) fromJSONString(expectedOutputMapJson);
     assertMapEqual(expected, output);
     return output;
@@ -250,9 +260,10 @@ public class TestCollectionAPIs extends SolrTestCaseJ4 {
     return new Pair<>(req, rsp);
   }
 
-  private static void assertMapEqual(Map expected, ZkNodeProps actual) {
+  private static void assertMapEqual(@SuppressWarnings({"rawtypes"})Map expected, ZkNodeProps actual) {
     assertEquals(errorMessage(expected, actual), expected.size(), actual.getProperties().size());
     for (Object o : expected.entrySet()) {
+      @SuppressWarnings({"rawtypes"})
       Map.Entry e = (Map.Entry) o;
       Object actualVal = actual.get((String) e.getKey());
       if (actualVal instanceof String[]) {
@@ -262,7 +273,7 @@ public class TestCollectionAPIs extends SolrTestCaseJ4 {
     }
   }
 
-  private static String errorMessage(Map expected, ZkNodeProps actual) {
+  private static String errorMessage(@SuppressWarnings({"rawtypes"})Map expected, ZkNodeProps actual) {
     return "expected: " + Utils.toJSONString(expected) + "\nactual: " + Utils.toJSONString(actual);
 
   }
@@ -271,6 +282,11 @@ public class TestCollectionAPIs extends SolrTestCaseJ4 {
     LocalSolrQueryRequest req;
 
     MockCollectionsHandler() {
+    }
+
+    @Override
+    protected CoreContainer checkErrors() {
+      return null;
     }
 
     @Override

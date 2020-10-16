@@ -22,6 +22,7 @@ import java.lang.invoke.MethodHandles;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import org.apache.solr.common.MapWriter;
 import org.apache.solr.common.util.StrUtils;
@@ -29,6 +30,10 @@ import org.apache.solr.common.util.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
+ */
 public class Preference implements MapWriter {
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
@@ -37,6 +42,7 @@ public class Preference implements MapWriter {
   final Policy.Sort sort;
   Preference next;
   final int idx;
+  @SuppressWarnings({"rawtypes"})
   private final Map original;
 
   public Preference(Map<String, Object> m) {
@@ -110,6 +116,7 @@ public class Preference implements MapWriter {
   @Override
   public void writeMap(EntryWriter ew) throws IOException {
     for (Object o : original.entrySet()) {
+      @SuppressWarnings({"rawtypes"})
       Map.Entry e = (Map.Entry) o;
       ew.put(String.valueOf(e.getKey()), e.getValue());
     }
@@ -130,6 +137,11 @@ public class Preference implements MapWriter {
     return original.equals(that.original);
   }
 
+  @Override
+  public int hashCode() {
+    return Objects.hash(getName(), precision, sort, idx);
+  }
+
   public Policy.SortParam getName() {
     return name;
   }
@@ -142,6 +154,7 @@ public class Preference implements MapWriter {
   /**
    * @return an unmodifiable copy of the original map from which this object was constructed
    */
+  @SuppressWarnings({"unchecked", "rawtypes"})
   public Map getOriginal() {
     return Collections.unmodifiableMap(original);
   }

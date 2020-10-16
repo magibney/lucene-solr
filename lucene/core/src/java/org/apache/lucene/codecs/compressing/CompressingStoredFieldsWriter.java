@@ -33,9 +33,9 @@ import org.apache.lucene.index.IndexFileNames;
 import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.index.MergeState;
 import org.apache.lucene.index.SegmentInfo;
+import org.apache.lucene.store.ByteBuffersDataOutput;
 import org.apache.lucene.store.DataOutput;
 import org.apache.lucene.store.Directory;
-import org.apache.lucene.store.GrowableByteArrayDataOutput;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.IndexOutput;
@@ -56,9 +56,12 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
 
   /** Extension of stored fields file */
   public static final String FIELDS_EXTENSION = "fdt";
-  
-  /** Extension of stored fields index file */
-  public static final String FIELDS_INDEX_EXTENSION = "fdx";
+  /** Extension of stored fields index */
+  public static final String INDEX_EXTENSION = "fdx";
+  /** Extension of stored fields meta */
+  public static final String META_EXTENSION = "fdm";
+  /** Codec name for the index. */
+  public static final String INDEX_CODEC_NAME = "Lucene85FieldsIndex";
 
   static final int         STRING = 0x00;
   static final int       BYTE_ARR = 0x01;
@@ -70,32 +73,34 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
   static final int TYPE_BITS = PackedInts.bitsRequired(NUMERIC_DOUBLE);
   static final int TYPE_MASK = (int) PackedInts.maxValue(TYPE_BITS);
 
-  static final String CODEC_SFX_IDX = "Index";
-  static final String CODEC_SFX_DAT = "Data";
   static final int VERSION_START = 1;
-  static final int VERSION_CURRENT = VERSION_START;
+  static final int VERSION_OFFHEAP_INDEX = 2;
+  /** Version where all metadata were moved to the meta file. */
+  static final int VERSION_META = 3;
+  static final int VERSION_CURRENT = VERSION_META;
+  static final int META_VERSION_START = 0;
 
   private final String segment;
-  private CompressingStoredFieldsIndexWriter indexWriter;
-  private IndexOutput fieldsStream;
+  private FieldsIndexWriter indexWriter;
+  private IndexOutput metaStream, fieldsStream;
 
   private Compressor compressor;
   private final CompressionMode compressionMode;
   private final int chunkSize;
   private final int maxDocsPerChunk;
 
-  private final GrowableByteArrayDataOutput bufferedDocs;
+  private final ByteBuffersDataOutput bufferedDocs;
   private int[] numStoredFields; // number of stored fields
   private int[] endOffsets; // end offsets in bufferedDocs
   private int docBase; // doc ID at the beginning of the chunk
   private int numBufferedDocs; // docBase + numBufferedDocs == current doc ID
   
-  private long numChunks; // number of compressed blocks written
   private long numDirtyChunks; // number of incomplete compressed blocks written
+  private long numDirtyDocs; // cumulative number of missing docs in incomplete chunks
 
   /** Sole constructor. */
-  public CompressingStoredFieldsWriter(Directory directory, SegmentInfo si, String segmentSuffix, IOContext context,
-      String formatName, CompressionMode compressionMode, int chunkSize, int maxDocsPerChunk, int blockSize) throws IOException {
+  CompressingStoredFieldsWriter(Directory directory, SegmentInfo si, String segmentSuffix, IOContext context,
+      String formatName, CompressionMode compressionMode, int chunkSize, int maxDocsPerChunk, int blockShift) throws IOException {
     assert directory != null;
     this.segment = si.name;
     this.compressionMode = compressionMode;
@@ -103,35 +108,30 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
     this.chunkSize = chunkSize;
     this.maxDocsPerChunk = maxDocsPerChunk;
     this.docBase = 0;
-    this.bufferedDocs = new GrowableByteArrayDataOutput(chunkSize);
+    this.bufferedDocs = ByteBuffersDataOutput.newResettableInstance();
     this.numStoredFields = new int[16];
     this.endOffsets = new int[16];
     this.numBufferedDocs = 0;
 
     boolean success = false;
-    IndexOutput indexStream = directory.createOutput(IndexFileNames.segmentFileName(segment, segmentSuffix, FIELDS_INDEX_EXTENSION), 
-                                                                     context);
     try {
-      fieldsStream = directory.createOutput(IndexFileNames.segmentFileName(segment, segmentSuffix, FIELDS_EXTENSION),
-                                                    context);
+      metaStream = directory.createOutput(IndexFileNames.segmentFileName(segment, segmentSuffix, META_EXTENSION), context);
+      CodecUtil.writeIndexHeader(metaStream, INDEX_CODEC_NAME + "Meta", VERSION_CURRENT, si.getId(), segmentSuffix);
+      assert CodecUtil.indexHeaderLength(INDEX_CODEC_NAME + "Meta", segmentSuffix) == metaStream.getFilePointer();
 
-      final String codecNameIdx = formatName + CODEC_SFX_IDX;
-      final String codecNameDat = formatName + CODEC_SFX_DAT;
-      CodecUtil.writeIndexHeader(indexStream, codecNameIdx, VERSION_CURRENT, si.getId(), segmentSuffix);
-      CodecUtil.writeIndexHeader(fieldsStream, codecNameDat, VERSION_CURRENT, si.getId(), segmentSuffix);
-      assert CodecUtil.indexHeaderLength(codecNameDat, segmentSuffix) == fieldsStream.getFilePointer();
-      assert CodecUtil.indexHeaderLength(codecNameIdx, segmentSuffix) == indexStream.getFilePointer();
+      fieldsStream = directory.createOutput(IndexFileNames.segmentFileName(segment, segmentSuffix, FIELDS_EXTENSION), context);
+      CodecUtil.writeIndexHeader(fieldsStream, formatName, VERSION_CURRENT, si.getId(), segmentSuffix);
+      assert CodecUtil.indexHeaderLength(formatName, segmentSuffix) == fieldsStream.getFilePointer();
 
-      indexWriter = new CompressingStoredFieldsIndexWriter(indexStream, blockSize);
-      indexStream = null;
+      indexWriter = new FieldsIndexWriter(directory, segment, segmentSuffix, INDEX_EXTENSION, INDEX_CODEC_NAME, si.getId(), blockShift, context);
 
-      fieldsStream.writeVInt(chunkSize);
-      fieldsStream.writeVInt(PackedInts.VERSION_CURRENT);
+      metaStream.writeVInt(chunkSize);
+      metaStream.writeVInt(PackedInts.VERSION_CURRENT);
 
       success = true;
     } finally {
       if (!success) {
-        IOUtils.closeWhileHandlingException(fieldsStream, indexStream, indexWriter);
+        IOUtils.closeWhileHandlingException(metaStream, fieldsStream, indexWriter);
       }
     }
   }
@@ -139,8 +139,9 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
   @Override
   public void close() throws IOException {
     try {
-      IOUtils.close(fieldsStream, indexWriter, compressor);
+      IOUtils.close(metaStream, fieldsStream, indexWriter, compressor);
     } finally {
+      metaStream = null;
       fieldsStream = null;
       indexWriter = null;
       compressor = null;
@@ -162,7 +163,7 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
     }
     this.numStoredFields[numBufferedDocs] = numStoredFieldsInDoc;
     numStoredFieldsInDoc = 0;
-    endOffsets[numBufferedDocs] = bufferedDocs.getPosition();
+    endOffsets[numBufferedDocs] = Math.toIntExact(bufferedDocs.size());
     ++numBufferedDocs;
     if (triggerFlush()) {
       flush();
@@ -215,7 +216,7 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
   }
 
   private boolean triggerFlush() {
-    return bufferedDocs.getPosition() >= chunkSize || // chunks of at least chunkSize bytes
+    return bufferedDocs.size() >= chunkSize || // chunks of at least chunkSize bytes
         numBufferedDocs >= maxDocsPerChunk;
   }
 
@@ -228,24 +229,29 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
       lengths[i] = endOffsets[i] - endOffsets[i - 1];
       assert lengths[i] >= 0;
     }
-    final boolean sliced = bufferedDocs.getPosition() >= 2 * chunkSize;
+    final boolean sliced = bufferedDocs.size() >= 2 * chunkSize;
     writeHeader(docBase, numBufferedDocs, numStoredFields, lengths, sliced);
 
     // compress stored fields to fieldsStream
+    //
+    // TODO: do we need to slice it since we already have the slices in the buffer? Perhaps
+    // we should use max-block-bits restriction on the buffer itself, then we won't have to check it here.
+    byte [] content = bufferedDocs.toArrayCopy();
+    bufferedDocs.reset();
+
     if (sliced) {
       // big chunk, slice it
-      for (int compressed = 0; compressed < bufferedDocs.getPosition(); compressed += chunkSize) {
-        compressor.compress(bufferedDocs.getBytes(), compressed, Math.min(chunkSize, bufferedDocs.getPosition() - compressed), fieldsStream);
+      for (int compressed = 0; compressed < content.length; compressed += chunkSize) {
+        compressor.compress(content, compressed, Math.min(chunkSize, content.length - compressed), fieldsStream);
       }
     } else {
-      compressor.compress(bufferedDocs.getBytes(), 0, bufferedDocs.getPosition(), fieldsStream);
+      compressor.compress(content, 0, content.length, fieldsStream);
     }
 
     // reset
     docBase += numBufferedDocs;
     numBufferedDocs = 0;
     bufferedDocs.reset();
-    numChunks++;
   }
   
   @Override
@@ -461,19 +467,22 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
   @Override
   public void finish(FieldInfos fis, int numDocs) throws IOException {
     if (numBufferedDocs > 0) {
-      flush();
       numDirtyChunks++; // incomplete: we had to force this flush
+      final long expectedChunkDocs = Math.min(maxDocsPerChunk, (long) ((double) chunkSize / bufferedDocs.size() * numBufferedDocs));
+      numDirtyDocs += expectedChunkDocs - numBufferedDocs;
+      flush();
     } else {
-      assert bufferedDocs.getPosition() == 0;
+      assert bufferedDocs.size() == 0;
     }
     if (docBase != numDocs) {
       throw new RuntimeException("Wrote " + docBase + " docs, finish called with numDocs=" + numDocs);
     }
-    indexWriter.finish(numDocs, fieldsStream.getFilePointer());
-    fieldsStream.writeVLong(numChunks);
-    fieldsStream.writeVLong(numDirtyChunks);
+    indexWriter.finish(numDocs, fieldsStream.getFilePointer(), metaStream);
+    metaStream.writeVLong(numDirtyChunks);
+    metaStream.writeVLong(numDirtyDocs);
+    CodecUtil.writeFooter(metaStream);
     CodecUtil.writeFooter(fieldsStream);
-    assert bufferedDocs.getPosition() == 0;
+    assert bufferedDocs.size() == 0;
   }
   
   // bulk merge is scary: its caused corruption bugs in the past.
@@ -583,7 +592,7 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
         // read the docstart + doccount from the chunk header (we write a new header, since doc numbers will change),
         // and just copy the bytes directly.
         IndexInput rawDocs = matchingFieldsReader.getFieldsStream();
-        CompressingStoredFieldsIndexReader index = matchingFieldsReader.getIndexReader();
+        FieldsIndex index = matchingFieldsReader.getIndexReader();
         rawDocs.seek(index.getStartPointer(0));
         int docID = 0;
         while (docID < maxDoc) {
@@ -624,8 +633,8 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
         }
         
         // since we bulk merged all chunks, we inherit any dirty ones from this segment.
-        numChunks += matchingFieldsReader.getNumChunks();
         numDirtyChunks += matchingFieldsReader.getNumDirtyChunks();
+        numDirtyDocs += matchingFieldsReader.getNumDirtyDocs();
       } else {
         // optimized merge, we copy serialized (but decompressed) bytes directly
         // even on simple docs (1 stored field), it seems to help by about 20%
@@ -661,7 +670,7 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
   boolean tooDirty(CompressingStoredFieldsReader candidate) {
     // more than 1% dirty, or more than hard limit of 1024 dirty chunks
     return candidate.getNumDirtyChunks() > 1024 || 
-           candidate.getNumDirtyChunks() * 100 > candidate.getNumChunks();
+           candidate.getNumDirtyDocs() * 100 > candidate.getNumDocs();
   }
 
   private static class CompressingStoredFieldsMergeSub extends DocIDMerger.Sub {
@@ -669,7 +678,7 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
     private final int maxDoc;
     int docID = -1;
 
-    public CompressingStoredFieldsMergeSub(CompressingStoredFieldsReader reader, MergeState.DocMap docMap, int maxDoc) {
+    CompressingStoredFieldsMergeSub(CompressingStoredFieldsReader reader, MergeState.DocMap docMap, int maxDoc) {
       super(docMap);
       this.maxDoc = maxDoc;
       this.reader = reader;
@@ -684,5 +693,10 @@ public final class CompressingStoredFieldsWriter extends StoredFieldsWriter {
         return docID;
       }
     }
+  }
+
+  @Override
+  public long ramBytesUsed() {
+    return bufferedDocs.ramBytesUsed() + numStoredFields.length * Integer.BYTES + endOffsets.length * Integer.BYTES;
   }
 }

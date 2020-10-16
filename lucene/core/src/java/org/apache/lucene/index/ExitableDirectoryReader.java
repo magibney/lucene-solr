@@ -31,6 +31,8 @@ import org.apache.lucene.util.automaton.CompiledAutomaton;
  * allows for a {@link QueryTimeout} implementation object to be checked periodically
  * to see if the thread should exit or not.  If {@link QueryTimeout#shouldExit()}
  * returns true, an {@link ExitingReaderException} is thrown.
+ *
+ * @see org.apache.lucene.search.TimeLimitingCollector
  */
 public class ExitableDirectoryReader extends FilterDirectoryReader {
   
@@ -43,7 +45,7 @@ public class ExitableDirectoryReader extends FilterDirectoryReader {
   public static class ExitingReaderException extends RuntimeException {
 
     /** Constructor **/
-    ExitingReaderException(String msg) {
+    public ExitingReaderException(String msg) {
       super(msg);
     }
   }
@@ -376,9 +378,9 @@ public class ExitableDirectoryReader extends FilterDirectoryReader {
     }
 
     @Override
-    public int getNumDataDimensions() throws IOException {
+    public int getNumDimensions() throws IOException {
       checkAndThrow();
-      return in.getNumDataDimensions();
+      return in.getNumDimensions();
     }
 
     @Override

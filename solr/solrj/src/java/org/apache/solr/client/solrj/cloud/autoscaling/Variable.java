@@ -37,6 +37,8 @@ import static java.util.Collections.unmodifiableSet;
 /**
  * A Variable Type used in Autoscaling policy rules. Each variable type may have unique implementation
  * of functionalities
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 public interface Variable {
   String NULL = "";
@@ -239,6 +241,7 @@ public interface Variable {
     DISKTYPE;
 
     public final String tagName;
+    @SuppressWarnings({"rawtypes"})
     public final Class type;
     public Meta meta;
 
@@ -377,6 +380,7 @@ public interface Variable {
   @interface Meta {
     String name();
 
+    @SuppressWarnings({"rawtypes"})
     Class type();
 
     String[] associatedPerNodeValue() default NULL;
@@ -401,6 +405,7 @@ public interface Variable {
 
     String metricsKey() default NULL;
 
+    @SuppressWarnings({"rawtypes"})
     Class implementation() default void.class;
 
     ComputedType[] computedValues() default ComputedType.NULL;

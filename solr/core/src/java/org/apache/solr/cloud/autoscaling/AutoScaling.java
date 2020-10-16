@@ -29,6 +29,11 @@ import org.apache.solr.client.solrj.cloud.autoscaling.TriggerEventType;
 import org.apache.solr.common.util.Utils;
 import org.apache.solr.core.SolrResourceLoader;
 
+/**
+ * Common autoscaling interfaces.
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
+ */
 public class AutoScaling {
 
   /**
@@ -212,6 +217,7 @@ public class AutoScaling {
       "        ]" +
       "    }";
 
+  @SuppressWarnings({"unchecked"})
   public static final Map<String, Object> AUTO_ADD_REPLICAS_TRIGGER_PROPS = (Map) Utils.fromJSONString(AUTO_ADD_REPLICAS_TRIGGER_DSL);
 
   public static final String SCHEDULED_MAINTENANCE_TRIGGER_NAME = ".scheduled_maintenance";
@@ -239,6 +245,7 @@ public class AutoScaling {
           "        ]" +
           "    }";
 
+  @SuppressWarnings({"unchecked"})
   public static final Map<String, Object> SCHEDULED_MAINTENANCE_TRIGGER_PROPS = (Map) Utils.fromJSONString(SCHEDULED_MAINTENANCE_TRIGGER_DSL);
 
 }

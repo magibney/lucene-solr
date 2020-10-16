@@ -33,6 +33,8 @@ import static org.apache.solr.common.params.CollectionParams.CollectionAction.MO
 
 /**
  * Implements the 'withCollection' variable type
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 public class WithCollectionVariable extends VariableBase {
 
@@ -42,6 +44,7 @@ public class WithCollectionVariable extends VariableBase {
 
   @Override
   public boolean match(Object inputVal, Operand op, Object val, String name, Row row) {
+    @SuppressWarnings({"unchecked"})
     Map<String, String> withCollectionMap = (Map<String, String>) inputVal;
     if (withCollectionMap == null || withCollectionMap.isEmpty()) return true;
 
@@ -61,6 +64,7 @@ public class WithCollectionVariable extends VariableBase {
       return;
     }
 
+    @SuppressWarnings({"unchecked"})
     Map<String, String> withCollectionMap = (Map<String, String>) cell.val;
     if (withCollectionMap == null || withCollectionMap.isEmpty()) return;
 
@@ -86,6 +90,7 @@ public class WithCollectionVariable extends VariableBase {
     String node = ctx.currentViolation.node;
     for (Row row : ctx.allRows) {
       if (node.equals(row.node)) {
+        @SuppressWarnings({"unchecked"})
         Map<String, String> withCollectionMap = (Map<String, String>) row.getVal("withCollection");
         if (withCollectionMap != null) {
           row.forEachReplica(r -> {
@@ -111,6 +116,7 @@ public class WithCollectionVariable extends VariableBase {
     if (ctx.violation.getViolatingReplicas().isEmpty()) return;
 
     Map<String, Object> nodeValues = ctx.session.nodeStateProvider.getNodeValues(ctx.violation.node, Collections.singleton("withCollection"));
+    @SuppressWarnings({"unchecked"})
     Map<String, String> withCollectionsMap = (Map<String, String>) nodeValues.get("withCollection");
     if (withCollectionsMap == null) return;
 

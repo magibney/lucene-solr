@@ -50,6 +50,7 @@ public abstract class DocRouter {
 
   public String getRouteField(DocCollection coll) {
     if (coll == null) return null;
+    @SuppressWarnings({"rawtypes"})
     Map m = (Map) coll.get(DOC_ROUTER);
     if (m == null) return null;
     return (String) m.get("field");
@@ -93,6 +94,14 @@ public abstract class DocRouter {
       assert min <= max;
       this.min = min;
       this.max = max;
+    }
+
+    public int min() {
+      return min;
+    }
+
+    public int max() {
+      return max;
     }
 
     public boolean includes(int hash) {
@@ -179,7 +188,7 @@ public abstract class DocRouter {
     } else if (fuzz < 0.0f) {
       fuzz = 0.0f;
     }
-    if (partitions == 0) return Collections.EMPTY_LIST;
+    if (partitions == 0) return Collections.emptyList();
     long rangeSize = (long)max - (long)min;
     long rangeStep = Math.max(1, rangeSize / partitions);
     long fuzzStep = Math.round(rangeStep * (double)fuzz / 2.0);

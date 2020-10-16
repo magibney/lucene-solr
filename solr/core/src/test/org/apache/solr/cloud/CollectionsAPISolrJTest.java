@@ -38,6 +38,7 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.google.common.collect.ImmutableList;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.TestUtil;
 import org.apache.solr.client.solrj.SolrClient;
@@ -75,8 +76,6 @@ import org.apache.zookeeper.KeeperException;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
-
-import com.google.common.collect.ImmutableList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -148,6 +147,7 @@ public class CollectionsAPISolrJTest extends SolrCloudTestCase {
           .process(cluster.getSolrClient());
 
       for (int i = 0; i < 300; i++) {
+        @SuppressWarnings({"rawtypes"})
         Map m = cluster.getSolrClient().getZkStateReader().getClusterProperty(COLLECTION_DEF, null);
         if (m != null) break;
         Thread.sleep(10);
@@ -232,6 +232,7 @@ public class CollectionsAPISolrJTest extends SolrCloudTestCase {
           .process(cluster.getSolrClient());
 
       for (int i = 0; i < 300; i++) {
+        @SuppressWarnings({"rawtypes"})
         Map m = cluster.getSolrClient().getZkStateReader().getClusterProperty(COLLECTION_DEF, null);
         if (m != null) break;
         Thread.sleep(10);
@@ -483,6 +484,7 @@ public class CollectionsAPISolrJTest extends SolrCloudTestCase {
     Path tmpDir = createTempDir("testPropertyParamsForCreate");
     Path dataDir = tmpDir.resolve("dataDir-" + TestUtil.randomSimpleString(random(), 1, 5));
     Path ulogDir = tmpDir.resolve("ulogDir-" + TestUtil.randomSimpleString(random(), 1, 5));
+    cluster.getJettySolrRunners().forEach(j -> j.getCoreContainer().getAllowPaths().add(tmpDir));
 
     CollectionAdminResponse response = CollectionAdminRequest.createCollection(collectionName, "conf", 1, 1)
         .withProperty(CoreAdminParams.DATA_DIR, dataDir.toString())
@@ -651,9 +653,11 @@ public class CollectionsAPISolrJTest extends SolrCloudTestCase {
     req.setWithSizeInfo(true);
     CollectionAdminResponse rsp = req.process(cluster.getSolrClient());
     assertEquals(0, rsp.getStatus());
+    @SuppressWarnings({"unchecked"})
     List<Object> nonCompliant = (List<Object>)rsp.getResponse().findRecursive(collectionName, "schemaNonCompliant");
     assertEquals(nonCompliant.toString(), 1, nonCompliant.size());
     assertTrue(nonCompliant.toString(), nonCompliant.contains("(NONE)"));
+    @SuppressWarnings({"unchecked"})
     NamedList<Object> segInfos = (NamedList<Object>) rsp.getResponse().findRecursive(collectionName, "shards", "shard1", "leader", "segInfos");
     assertNotNull(Utils.toJSONString(rsp), segInfos.findRecursive("info", "core", "startTime"));
     assertNotNull(Utils.toJSONString(rsp), segInfos.get("fieldInfoLegend"));
@@ -672,6 +676,43 @@ public class CollectionsAPISolrJTest extends SolrCloudTestCase {
     assertEquals(0, rsp.getStatus());
     Number down = (Number) rsp.getResponse().findRecursive(collectionName, "shards", "shard1", "replicas", "down");
     assertTrue("should be some down replicas, but there were none in shard1:" + rsp, down.intValue() > 0);
+  }
+  
+  @Test
+  public void testColStatusCollectionName() throws Exception {
+    final String[] collectionNames = {"collectionStatusTest_1", "collectionStatusTest_2"};
+    for (String collectionName : collectionNames) {
+      CollectionAdminRequest.createCollection(collectionName, "conf2", 1, 1)
+      .process(cluster.getSolrClient());
+      cluster.waitForActiveCollection(collectionName, 1, 1);
+    }
+    // assert only one collection is returned using the solrj colstatus interface
+    CollectionAdminRequest.ColStatus req = CollectionAdminRequest.collectionStatus(collectionNames[0]);
+    CollectionAdminResponse rsp = req.process(cluster.getSolrClient());
+    assertNotNull(rsp.getResponse().get(collectionNames[0]));
+    assertNull(rsp.getResponse().get(collectionNames[1]));
+   
+    req = CollectionAdminRequest.collectionStatus(collectionNames[1]);
+    rsp = req.process(cluster.getSolrClient());
+    assertNotNull(rsp.getResponse().get(collectionNames[1]));
+    assertNull(rsp.getResponse().get(collectionNames[0]));
+    
+    // assert passing null collection fails
+    expectThrows(NullPointerException.class, 
+        "Passing null to collectionStatus should result in an NPE",
+        () -> CollectionAdminRequest.collectionStatus(null));
+    
+    // assert passing non-existent collection returns no collections
+    req = CollectionAdminRequest.collectionStatus("doesNotExist");
+    rsp = req.process(cluster.getSolrClient());
+    assertNull(rsp.getResponse().get(collectionNames[0]));
+    assertNull(rsp.getResponse().get(collectionNames[1]));
+    
+    // assert collectionStatuses returns all collections
+    req = CollectionAdminRequest.collectionStatuses();
+    rsp = req.process(cluster.getSolrClient());
+    assertNotNull(rsp.getResponse().get(collectionNames[1]));
+    assertNotNull(rsp.getResponse().get(collectionNames[0]));
   }
 
   private static final int NUM_DOCS = 10;
@@ -726,7 +767,7 @@ public class CollectionsAPISolrJTest extends SolrCloudTestCase {
       try {
         restartTime = getCoreStatus(leader).getCoreStartTime().getTime();
       } catch (Exception e) {
-        log.warn("Exception getting core start time: {}", e.getMessage());
+        log.warn("Exception getting core start time: ", e);
         return false;
       }
       return restartTime > coreStartTime.get();
@@ -791,7 +832,7 @@ public class CollectionsAPISolrJTest extends SolrCloudTestCase {
       try {
         restartTime = getCoreStatus(leader).getCoreStartTime().getTime();
       } catch (Exception e) {
-        log.warn("Exception getting core start time: {}", e.getMessage());
+        log.warn("Exception getting core start time: ", e);
         return false;
       }
       return restartTime > coreStartTime.get();

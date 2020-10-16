@@ -29,3 +29,9 @@ pom.xml
 __pycache__
 /dev-tools/scripts/scripts.iml
 .DS_Store
+.gradle
+buildSrc
+gradle.properties
+gradle/
+gradlew
+gradlew.bat

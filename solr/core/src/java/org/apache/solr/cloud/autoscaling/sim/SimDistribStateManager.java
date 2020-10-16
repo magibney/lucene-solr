@@ -46,7 +46,7 @@ import org.apache.solr.common.cloud.ZkStateReader;
 import org.apache.solr.common.params.AutoScalingParams;
 import org.apache.solr.common.util.ExecutorUtil;
 import org.apache.solr.common.util.Utils;
-import org.apache.solr.util.DefaultSolrThreadFactory;
+import org.apache.solr.common.util.SolrNamedThreadFactory;
 import org.apache.solr.util.IdUtils;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
@@ -66,6 +66,8 @@ import org.slf4j.LoggerFactory;
  * Simulated {@link DistribStateManager} that keeps all data locally in a static structure. Instances of this
  * class are identified by their id in order to simulate the deletion of ephemeral nodes when {@link #close()} is
  * invoked.
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 public class SimDistribStateManager implements DistribStateManager {
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
@@ -232,7 +234,7 @@ public class SimDistribStateManager implements DistribStateManager {
   public SimDistribStateManager(Node root) {
     this.id = IdUtils.timeRandomId();
     this.root = root != null ? root : createNewRootNode();
-    watchersPool = ExecutorUtil.newMDCAwareFixedThreadPool(10, new DefaultSolrThreadFactory("sim-watchers"));
+    watchersPool = ExecutorUtil.newMDCAwareFixedThreadPool(10, new SolrNamedThreadFactory("sim-watchers"));
     String bufferSize = System.getProperty("jute.maxbuffer", Integer.toString(0xffffff));
     juteMaxbuffer = Integer.parseInt(bufferSize);
   }
@@ -244,7 +246,9 @@ public class SimDistribStateManager implements DistribStateManager {
    */
   public void copyFrom(DistribStateManager other, boolean failOnExists) throws InterruptedException, IOException, KeeperException, AlreadyExistsException, BadVersionException {
     List<String> tree = other.listTree("/");
-    log.info("- copying " + tree.size() + " resources...");
+    if (log.isInfoEnabled()) {
+      log.info("- copying {} resources...", tree.size());
+    }
     // check if any node exists
     for (String path : tree) {
       if (hasData(path) && failOnExists) {
@@ -617,6 +621,7 @@ public class SimDistribStateManager implements DistribStateManager {
   }
 
   @Override
+  @SuppressWarnings({"unchecked"})
   public AutoScalingConfig getAutoScalingConfig(Watcher watcher) throws InterruptedException, IOException {
     Map<String, Object> map = new HashMap<>();
     int version = 0;

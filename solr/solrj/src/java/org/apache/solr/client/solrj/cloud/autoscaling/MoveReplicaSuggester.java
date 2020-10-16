@@ -30,16 +30,22 @@ import org.slf4j.LoggerFactory;
 
 import static org.apache.solr.common.params.CollectionParams.CollectionAction.MOVEREPLICA;
 
+/**
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
+ */
 public class MoveReplicaSuggester extends Suggester {
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
   @Override
+  @SuppressWarnings({"rawtypes"})
   SolrRequest init() {
     SolrRequest operation = tryEachNode(true);
     if (operation == null) operation = tryEachNode(false);
     return operation;
   }
 
+  @SuppressWarnings({"rawtypes"})
   SolrRequest tryEachNode(boolean strict) {
     //iterate through elements and identify the least loaded
     List<Violation> leastSeriousViolation = null;
@@ -72,8 +78,8 @@ public class MoveReplicaSuggester extends Suggester {
 
           int result = -1;
           if (!force && srcRowModified.isLive && targetRow.isLive)  {
-            result = tmpSession.getPolicy().clusterPreferences.get(0).compare(srcRowModified, tmpSession.getNode(targetRow.node), true);
-            if (result == 0) result = tmpSession.getPolicy().clusterPreferences.get(0).compare(srcRowModified, tmpSession.getNode(targetRow.node), false);
+            result = tmpSession.getPolicy().getClusterPreferences().get(0).compare(srcRowModified, tmpSession.getNode(targetRow.node), true);
+            if (result == 0) result = tmpSession.getPolicy().getClusterPreferences().get(0).compare(srcRowModified, tmpSession.getNode(targetRow.node), false);
           }
 
           if (result <= 0) {

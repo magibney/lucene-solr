@@ -50,18 +50,22 @@ import org.slf4j.LoggerFactory;
 import static org.apache.solr.client.solrj.cloud.autoscaling.Variable.Type.FREEDISK;
 import static org.apache.solr.common.params.CollectionAdminParams.WITH_COLLECTION;
 
-/* A suggester is capable of suggesting a collection operation
+/**
+ * A suggester is capable of suggesting a collection operation
  * given a particular session. Before it suggests a new operation,
  * it ensures that ,
  *  a) load is reduced on the most loaded node
  *  b) it causes no new violations
  *
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 public abstract class Suggester implements MapWriter {
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
   protected final EnumMap<Hint, Object> hints = new EnumMap<>(Hint.class);
   Policy.Session session;
+  @SuppressWarnings({"rawtypes"})
   SolrRequest operation;
   boolean force;
   protected List<Violation> originalViolations = new ArrayList<>();
@@ -88,6 +92,7 @@ public abstract class Suggester implements MapWriter {
     }
     return false;
   }
+  @SuppressWarnings({"unchecked", "rawtypes"})
   public Suggester hint(Hint hint, Object value) {
     hint.validator.accept(value);
     if (hint.multiValued) {
@@ -143,9 +148,10 @@ public abstract class Suggester implements MapWriter {
     return true;
   }
 
+  @SuppressWarnings({"rawtypes"})
   abstract SolrRequest init();
 
-  @SuppressWarnings("unchecked")
+  @SuppressWarnings({"unchecked", "rawtypes"})
   public SolrRequest getSuggestion() {
     if (!isInitialized) {
       Set<String> collections = (Set<String>) hints.getOrDefault(Hint.COLL, Collections.emptySet());
@@ -177,7 +183,7 @@ public abstract class Suggester implements MapWriter {
         // the source node is dead so live nodes may not have it
         for (String srcNode : srcNodes) {
           if (session.matrix.stream().noneMatch(row -> row.node.equals(srcNode))) {
-            session.matrix.add(new Row(srcNode, session.getPolicy().params, session.getPolicy().perReplicaAttributes, session));
+            session.matrix.add(new Row(srcNode, session.getPolicy().getParams(), session.getPolicy().getPerReplicaAttributes(), session));
           }
         }
       }
@@ -226,14 +232,16 @@ public abstract class Suggester implements MapWriter {
   public static class SuggestionInfo implements MapWriter {
     Suggestion.Type type;
     Violation violation;
+    @SuppressWarnings({"rawtypes"})
     SolrRequest operation;
 
-    public SuggestionInfo(Violation violation, SolrRequest op, Suggestion.Type type) {
+    public SuggestionInfo(Violation violation, @SuppressWarnings({"rawtypes"})SolrRequest op, Suggestion.Type type) {
       this.violation = violation;
       this.operation = op;
       this.type = type;
     }
 
+    @SuppressWarnings({"rawtypes"})
     public SolrRequest getOperation() {
       return operation;
     }
@@ -286,7 +294,7 @@ public abstract class Suggester implements MapWriter {
       //the computed value can change over time. So it's better to evaluate it in the end
       if (isTxOpen && v.getClause().hasComputedValue) continue;
       int idx = originalViolations.indexOf(v);
-      if (idx < 0 /*|| originalViolations.get(idx).isLessSerious(v)*/) return true;
+      if (idx < 0 || originalViolations.get(idx).isLessSerious(v)) return true;
     }
     return false;
   }
@@ -324,7 +332,7 @@ public abstract class Suggester implements MapWriter {
   List<Violation> testChangedMatrix(boolean executeInStrictMode, Policy.Session session) {
     if (this.deviations != null) this.lastBestDeviation = this.deviations;
     this.deviations = null;
-    Policy.setApproxValuesAndSortNodes(session.getPolicy().clusterPreferences, session.matrix);
+    Policy.setApproxValuesAndSortNodes(session.getPolicy().getClusterPreferences(), session.matrix);
     List<Violation> errors = new ArrayList<>();
     for (Clause clause : session.expandedClauses) {
       Clause originalClause = clause.derivedFrom == null ? clause : clause.derivedFrom;
@@ -344,6 +352,7 @@ public abstract class Suggester implements MapWriter {
     Object hintVal = hints.get(hint);
     if (hintVal == null) return true;
     if (hint.multiValued) {
+      @SuppressWarnings({"rawtypes"})
       Set set = (Set) hintVal;
       return set == null || set.contains(v);
     } else {
@@ -356,11 +365,13 @@ public abstract class Suggester implements MapWriter {
     // collection shard pair
     // this should be a Pair<String, String> , (collection,shard)
     COLL_SHARD(true, v -> {
+      @SuppressWarnings({"rawtypes"})
       Collection c = v instanceof Collection ? (Collection) v : Collections.singleton(v);
       for (Object o : c) {
         if (!(o instanceof Pair)) {
           throw new RuntimeException("COLL_SHARD hint must use a Pair");
         }
+        @SuppressWarnings({"rawtypes"})
         Pair p = (Pair) o;
         if (p.first() == null || p.second() == null) {
           throw new RuntimeException("Both collection and shard must not be null");
@@ -371,6 +382,7 @@ public abstract class Suggester implements MapWriter {
       @Override
       public Object parse(Object v) {
         if (v instanceof Map) {
+          @SuppressWarnings({"rawtypes"})
           Map map = (Map) v;
           return Pair.parse(map);
         }
@@ -409,6 +421,7 @@ public abstract class Suggester implements MapWriter {
 
     Hint(boolean multiValued) {
       this(multiValued, v -> {
+        @SuppressWarnings({"rawtypes"})
         Collection c = v instanceof Collection ? (Collection) v : Collections.singleton(v);
         for (Object o : c) {
           if (!(o instanceof String)) throw new RuntimeException("hint must be of type String");
@@ -453,6 +466,7 @@ public abstract class Suggester implements MapWriter {
     ew.put("hints", (MapWriter) ew1 -> hints.forEach((hint, o) -> ew1.putNoEx(hint.toString(), o)));
   }
 
+  @SuppressWarnings({"rawtypes"})
   protected Collection setupWithCollectionTargetNodes(Set<String> collections, Set<Pair<String, String>> s, String withCollection) {
     Collection originalTargetNodesCopy = null;
     if (withCollection != null) {
@@ -477,6 +491,7 @@ public abstract class Suggester implements MapWriter {
 
       if (originalTargetNodesCopy != null && !originalTargetNodesCopy.isEmpty()) {
         // find intersection of the set of target nodes with the set of 'withCollection' nodes
+        @SuppressWarnings({"unchecked"})
         Set<String> set = (Set<String>) hints.computeIfAbsent(Hint.TARGET_NODE, h -> new HashSet<>());
         set.retainAll(withCollectionNodes);
         if (set.isEmpty()) {

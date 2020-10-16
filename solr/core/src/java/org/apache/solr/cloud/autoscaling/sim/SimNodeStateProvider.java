@@ -18,7 +18,9 @@ package org.apache.solr.cloud.autoscaling.sim;
 
 import java.io.IOException;
 import java.lang.invoke.MethodHandles;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -44,6 +46,8 @@ import org.slf4j.LoggerFactory;
  * Simulated {@link NodeStateProvider}.
  * Note: in order to setup node-level metrics use {@link #simSetNodeValues(String, Map)}. However, in order
  * to setup core-level metrics use {@link SimClusterStateProvider#simSetCollectionValue(String, String, Object, boolean, boolean)}.
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 public class SimNodeStateProvider implements NodeStateProvider {
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
@@ -151,6 +155,7 @@ public class SimNodeStateProvider implements NodeStateProvider {
    * @param key property name
    * @param value property value.
    */
+  @SuppressWarnings({"unchecked", "rawtypes"})
   public void simAddNodeValue(String node, String key, Object value) throws InterruptedException {
     lock.lockInterruptibly();
     try {
@@ -180,7 +185,7 @@ public class SimNodeStateProvider implements NodeStateProvider {
    * @param node node id
    */
   public void simRemoveNodeValues(String node) throws InterruptedException {
-    log.debug("--removing value for " + node);
+    log.debug("--removing value for {}", node);
     lock.lockInterruptibly();
     try {
       Map<String, Object> values = nodeValues.remove(node);
@@ -203,7 +208,7 @@ public class SimNodeStateProvider implements NodeStateProvider {
     try {
       AtomicBoolean updateRoles = new AtomicBoolean(false);
       myNodes.forEach(n -> {
-        log.debug("- removing dead node values: " + n);
+        log.debug("- removing dead node values: {}", n);
         Map<String, Object> vals = nodeValues.remove(n);
         if (vals.containsKey("nodeRole")) {
           updateRoles.set(true);
@@ -231,6 +236,11 @@ public class SimNodeStateProvider implements NodeStateProvider {
    */
   public Map<String, Map<String, Object>> simGetAllNodeValues() {
     return nodeValues;
+  }
+
+  /** Get all values for a selected node. */
+  public Map<String, Object> simGetNodeValues(String node) {
+    return nodeValues.getOrDefault(node, Collections.emptyMap());
   }
 
   private void saveRoles() {
@@ -266,7 +276,7 @@ public class SimNodeStateProvider implements NodeStateProvider {
     for (String tag : tags) {
       Matcher m = METRIC_KEY_PATTERN.matcher(tag);
       if (!m.matches() || m.groupCount() < 2) {
-        log.warn("Invalid metrics: tag: " + tag);
+        log.warn("Invalid metrics: tag: {}", tag);
         continue;
       }
       String registryName = m.group(1);
@@ -278,7 +288,7 @@ public class SimNodeStateProvider implements NodeStateProvider {
       m = REGISTRY_PATTERN.matcher(registryName);
 
       if (!m.matches()) {
-        log.warn("Invalid registry name: " + registryName);
+        log.warn("Invalid registry name: {}", registryName);
         continue;
       }
       String collection = m.group(1);
@@ -306,7 +316,7 @@ public class SimNodeStateProvider implements NodeStateProvider {
 
   @Override
   public Map<String, Object> getNodeValues(String node, Collection<String> tags) {
-    log.trace("-- requested values for " + node + ": " + tags);
+    log.trace("-- requested values for {}: {}", node, tags);
     if (!liveNodesSet.contains(node)) {
       throw new RuntimeException("non-live node " + node);
     }
@@ -319,7 +329,10 @@ public class SimNodeStateProvider implements NodeStateProvider {
     if (values == null) {
       return result;
     }
-    result.putAll(values.entrySet().stream().filter(e -> tags.contains(e.getKey())).collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue())));
+    result.putAll(values.entrySet().stream()
+            .filter(e -> tags.contains(e.getKey()))
+            .filter(e -> e.getValue() != null)
+            .collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue())));
     return result;
   }
 
@@ -329,11 +342,11 @@ public class SimNodeStateProvider implements NodeStateProvider {
     if (replicas == null || replicas.isEmpty()) {
       return new HashMap<>();
     }
-    Map<String, Map<String, List<ReplicaInfo>>> res = new HashMap<>();
+    Map<String, Map<String, List<ReplicaInfo>>> res = new HashMap<String, Map<String, List<ReplicaInfo>>>();
     // TODO: probably needs special treatment for "metrics:solr.core..." tags
     for (ReplicaInfo r : replicas) {
-      Map<String, List<ReplicaInfo>> perCollection = res.computeIfAbsent(r.getCollection(), Utils.NEW_HASHMAP_FUN);
-      List<ReplicaInfo> perShard = perCollection.computeIfAbsent(r.getShard(), Utils.NEW_ARRAYLIST_FUN);
+      Map<String, List<ReplicaInfo>> perCollection = res.computeIfAbsent(r.getCollection(), o -> new HashMap<String, List<ReplicaInfo>>());
+      List<ReplicaInfo> perShard = perCollection.computeIfAbsent(r.getShard(), o -> new ArrayList<ReplicaInfo>());
       // XXX filter out some properties?
       perShard.add(r);
     }

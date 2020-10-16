@@ -162,9 +162,15 @@ public interface CommonParams {
   boolean SEGMENT_TERMINATE_EARLY_DEFAULT = false;
 
   /**
-   * Timeout value in milliseconds.  If not set, or the value is &gt;= 0, there is no timeout.
+   * Timeout value in milliseconds.  If not set, or the value is &gt; 0, there is no timeout.
    */
   String TIME_ALLOWED = "timeAllowed";
+
+  /**
+   * The number of hits that need to be counted accurately. If more than {@link #MIN_EXACT_COUNT} documents
+   * match a query, then the value in "numFound" may be an estimate to speedup search.
+   */
+  String MIN_EXACT_COUNT = "minExactCount";
   
   /** 'true' if the header should include the handler name */
   String HEADER_ECHO_HANDLER = "echoHandler";
@@ -263,9 +269,20 @@ public interface CommonParams {
   String COST = "cost";
 
   /**
-   * Request ID parameter added to the request when using debug=track
+   * Request ID parameter added to all distributed queries (that do not opt out)
+   *
+   * @see #DISABLE_REQUEST_ID
    */
   String REQUEST_ID = "rid";
+
+  /**
+   * An opt-out flag to prevent the addition of {@link #REQUEST_ID} tracing on distributed queries
+   *
+   * Defaults to 'false' if not specified.
+   *
+   * @see #REQUEST_ID
+   */
+  String DISABLE_REQUEST_ID = "disableRequestId";
 
   /**
    * Request Purpose parameter added to each internal shard request when using debug=track
@@ -276,6 +293,7 @@ public interface CommonParams {
    * When querying a node, prefer local node's cores for distributed queries.
    * @deprecated Use {@code ShardParams.SHARDS_PREFERENCE}
    */
+  @Deprecated // SOLR-14035
   String PREFER_LOCAL_SHARDS = "preferLocalShards";
 
   String JAVABIN = "javabin";

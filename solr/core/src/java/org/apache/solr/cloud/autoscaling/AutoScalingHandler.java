@@ -76,7 +76,9 @@ import static org.apache.solr.common.params.AutoScalingParams.*;
 import static org.apache.solr.common.params.CommonParams.JSON;
 
 /**
- * Handler for /cluster/autoscaling
+ * Handler for /cluster/autoscaling.
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 public class AutoScalingHandler extends RequestHandlerBase implements PermissionNameProvider {
   public static final String HANDLER_PATH = "/admin/autoscaling";
@@ -120,6 +122,7 @@ public class AutoScalingHandler extends RequestHandlerBase implements Permission
   }
 
   @Override
+  @SuppressWarnings({"unchecked", "rawtypes"})
   public void handleRequestBody(SolrQueryRequest req, SolrQueryResponse rsp) throws Exception {
     try {
       String httpMethod = (String) req.getContext().get("httpMethod");
@@ -187,11 +190,13 @@ public class AutoScalingHandler extends RequestHandlerBase implements Permission
   }
 
 
+  @SuppressWarnings({"unchecked"})
   private void handleSuggestions(SolrQueryResponse rsp, AutoScalingConfig autoScalingConf, SolrParams params) {
     rsp.getValues().add("suggestions",
         PolicyHelper.getSuggestions(autoScalingConf, cloudManager, params));
   }
 
+  @SuppressWarnings({"unchecked", "rawtypes"})
   public void processOps(SolrQueryRequest req, SolrQueryResponse rsp, List<CommandOperation> ops)
       throws KeeperException, InterruptedException, IOException {
     while (true) {
@@ -269,11 +274,13 @@ public class AutoScalingHandler extends RequestHandlerBase implements Permission
     return currentConfig.withProperties(configProps);
   }
 
+  @SuppressWarnings({"unchecked"})
   private void handleDiagnostics(SolrQueryResponse rsp, AutoScalingConfig autoScalingConf) {
     Policy policy = autoScalingConf.getPolicy();
     rsp.getValues().add("diagnostics", PolicyHelper.getDiagnostics(policy, cloudManager));
   }
 
+  @SuppressWarnings({"unchecked"})
   private AutoScalingConfig handleSetClusterPolicy(SolrQueryRequest req, SolrQueryResponse rsp, CommandOperation op,
                                                    AutoScalingConfig currentConfig) throws KeeperException, InterruptedException, IOException {
     List<Map<String, Object>> clusterPolicy = (List<Map<String, Object>>) op.getCommandData();
@@ -293,6 +300,7 @@ public class AutoScalingHandler extends RequestHandlerBase implements Permission
     return currentConfig;
   }
 
+  @SuppressWarnings({"unchecked"})
   private AutoScalingConfig handleSetClusterPreferences(SolrQueryRequest req, SolrQueryResponse rsp, CommandOperation op,
                                                         AutoScalingConfig currentConfig) throws KeeperException, InterruptedException, IOException {
     List<Map<String, Object>> preferences = (List<Map<String, Object>>) op.getCommandData();
@@ -336,6 +344,7 @@ public class AutoScalingHandler extends RequestHandlerBase implements Permission
     return currentConfig;
   }
 
+  @SuppressWarnings({"unchecked"})
   private AutoScalingConfig handleSetPolicies(SolrQueryRequest req, SolrQueryResponse rsp, CommandOperation op,
                                               AutoScalingConfig currentConfig) throws KeeperException, InterruptedException, IOException {
     Map<String, Object> policiesMap = op.getDataMap();
@@ -361,6 +370,7 @@ public class AutoScalingHandler extends RequestHandlerBase implements Permission
     return currentConfig;
   }
 
+  @SuppressWarnings({"unchecked"})
   private AutoScalingConfig handleResumeTrigger(SolrQueryRequest req, SolrQueryResponse rsp, CommandOperation op,
                                                 AutoScalingConfig currentConfig) throws KeeperException, InterruptedException {
     String triggerName = op.getStr(NAME);
@@ -393,6 +403,7 @@ public class AutoScalingHandler extends RequestHandlerBase implements Permission
     return currentConfig;
   }
 
+  @SuppressWarnings({"unchecked"})
   private AutoScalingConfig handleSuspendTrigger(SolrQueryRequest req, SolrQueryResponse rsp, CommandOperation op,
                                                  AutoScalingConfig currentConfig) throws KeeperException, InterruptedException {
     String triggerName = op.getStr(NAME);
@@ -525,6 +536,7 @@ public class AutoScalingHandler extends RequestHandlerBase implements Permission
     return currentConfig;
   }
 
+  @SuppressWarnings({"unchecked"})
   private AutoScalingConfig handleSetTrigger(SolrQueryRequest req, SolrQueryResponse rsp, CommandOperation op,
                                              AutoScalingConfig currentConfig) throws KeeperException, InterruptedException {
     // we're going to modify the op - use a copy
@@ -532,7 +544,7 @@ public class AutoScalingHandler extends RequestHandlerBase implements Permission
     String eventTypeStr = op.getStr(EVENT);
 
     if (op.hasError()) return currentConfig;
-    TriggerEventType eventType = TriggerEventType.valueOf(eventTypeStr.trim().toUpperCase(Locale.ROOT));
+    TriggerEventType.valueOf(eventTypeStr.trim().toUpperCase(Locale.ROOT));
 
     String waitForStr = op.getStr(WAIT_FOR, null);
 
@@ -548,9 +560,6 @@ public class AutoScalingHandler extends RequestHandlerBase implements Permission
       }
       opCopy.getDataMap().put(WAIT_FOR, seconds);
     }
-
-    Integer lowerBound = op.getInt(LOWER_BOUND, null);
-    Integer upperBound = op.getInt(UPPER_BOUND, null);
 
     List<Map<String, String>> actions = (List<Map<String, String>>) op.getVal(ACTIONS);
     if (actions == null) {
@@ -591,9 +600,6 @@ public class AutoScalingHandler extends RequestHandlerBase implements Permission
     // check that there's a default SystemLogListener, unless user specified another one
     return withSystemLogListener(currentConfig, triggerName);
   }
-
-  private static String fullName = SystemLogListener.class.getName();
-  private static String solrName = "solr." + SystemLogListener.class.getSimpleName();
 
   public static AutoScalingConfig withSystemLogListener(AutoScalingConfig autoScalingConfig, String triggerName) {
     Map<String, AutoScalingConfig.TriggerListenerConfig> configs = autoScalingConfig.getTriggerListenerConfigs();
@@ -689,8 +695,7 @@ public class AutoScalingHandler extends RequestHandlerBase implements Permission
   }
 
   private void verifyAutoScalingConf(AutoScalingConfig autoScalingConf) throws IOException {
-    Policy.Session session = autoScalingConf.getPolicy()
-        .createSession(cloudManager);
+    autoScalingConf.getPolicy().createSession(cloudManager);
     log.debug("Verified autoscaling configuration");
   }
 

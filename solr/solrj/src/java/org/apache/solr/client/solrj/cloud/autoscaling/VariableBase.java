@@ -28,6 +28,10 @@ import static org.apache.solr.client.solrj.cloud.autoscaling.Suggestion.suggestN
 import static org.apache.solr.client.solrj.cloud.autoscaling.Suggestion.suggestPositiveViolations;
 import static org.apache.solr.client.solrj.cloud.autoscaling.Variable.Type.FREEDISK;
 
+/**
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
+ */
 public class VariableBase implements Variable {
   final Type varType;
 
@@ -98,7 +102,9 @@ public class VariableBase implements Variable {
     return info;
   }
 
+  @SuppressWarnings({"unchecked"})
   static Variable loadImpl(Meta meta, Type t) {
+    @SuppressWarnings({"rawtypes"})
     Class implementation = meta.implementation();
     if (implementation == void.class) implementation = VariableBase.class;
     try {

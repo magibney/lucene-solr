@@ -25,6 +25,10 @@ import org.apache.solr.common.MapWriter;
 import static org.apache.solr.client.solrj.cloud.autoscaling.Operand.GREATER_THAN;
 import static org.apache.solr.client.solrj.cloud.autoscaling.Operand.LESS_THAN;
 
+/**
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
+ */
 public class Condition implements MapWriter {
   final String name;
   final Object val;
@@ -74,6 +78,11 @@ public class Condition implements MapWriter {
 
   boolean isPass(Row row) {
     return isPass(row.getVal(name), row);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(name, val, op);
   }
 
   @Override

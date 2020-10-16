@@ -44,6 +44,8 @@ import static org.apache.solr.cloud.autoscaling.OverseerTriggerThread.MARKER_STA
  * This plan simply removes nodeAdded and nodeLost markers from Zookeeper if their TTL has
  * expired. These markers are used by {@link NodeAddedTrigger} and {@link NodeLostTrigger} to
  * ensure fault tolerance in case of Overseer leader crash.
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 public class InactiveMarkersPlanAction extends TriggerActionBase {
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
@@ -75,7 +77,9 @@ public class InactiveMarkersPlanAction extends TriggerActionBase {
 
   @Override
   public void process(TriggerEvent event, ActionContext context) throws Exception {
-    log.trace("-- {} cleaning markers", getName());
+    if (log.isTraceEnabled()) {
+      log.trace("-- {} cleaning markers", getName());
+    }
     // use epoch time to track this across JVMs and nodes
     long currentTimeNs = cloudManager.getTimeSource().getEpochTimeNs();
     Map<String, Object> results = new LinkedHashMap<>();
@@ -123,7 +127,7 @@ public class InactiveMarkersPlanAction extends TriggerActionBase {
           } catch (BadVersionException be) {
             throw new RuntimeException("should never happen", be);
           } catch (NotEmptyException ne) {
-            log.error("Marker znode should be empty but it's not! Ignoring {} ({})", markerPath, ne.toString());
+            log.error("Marker znode should be empty but it's not! Ignoring {} ({})", markerPath, ne);
           }
         } else {
           log.trace(" -- keep {}, delta={}, ttl={}, active={}", markerPath, delta, cleanupTTL, activeMarker);
@@ -132,7 +136,7 @@ public class InactiveMarkersPlanAction extends TriggerActionBase {
         Thread.currentThread().interrupt();
         return;
       } catch (IOException | KeeperException e) {
-        log.warn("Could not cleanup marker at {}, skipping... ({}}", markerPath, e.getMessage());
+        log.warn("Could not cleanup marker at {}, skipping... ", markerPath, e);
       }
     });
   }

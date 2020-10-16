@@ -55,6 +55,8 @@ import org.slf4j.LoggerFactory;
 /**
  * A distributed queue that uses {@link DistribStateManager} as the underlying distributed store.
  * Implementation based on {@link org.apache.solr.cloud.ZkDistributedQueue}
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 public class GenericDistributedQueue implements DistributedQueue {
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
@@ -252,7 +254,9 @@ public class GenericDistributedQueue implements DistributedQueue {
             try {
               stateManager.removeData(ops.get(j).getPath(), -1);
             } catch (NoSuchElementException e2) {
-              log.debug("Can not remove node which is not exist : " + ops.get(j).getPath());
+              if (log.isDebugEnabled()) {
+                log.debug("Can not remove node which is not exist : {}", ops.get(j).getPath());
+              }
             }
           }
         }
@@ -419,7 +423,7 @@ public class GenericDistributedQueue implements DistributedQueue {
         for (String childName : childNames) {
           // Check format
           if (!childName.regionMatches(0, PREFIX, 0, PREFIX.length())) {
-            log.debug("Found child node with improper name: " + childName);
+            log.debug("Found child node with improper name: {}", childName);
             continue;
           }
           orderedChildren.add(childName);

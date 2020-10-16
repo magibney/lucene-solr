@@ -21,7 +21,18 @@ import java.io.IOException;
 import java.util.Comparator;
 import java.util.Objects;
 
+import org.apache.lucene.index.DocValues;
+import org.apache.lucene.index.IndexSorter;
+import org.apache.lucene.index.SortFieldProvider;
+import org.apache.lucene.search.comparators.DocComparator;
+import org.apache.lucene.search.comparators.DoubleComparator;
+import org.apache.lucene.search.comparators.FloatComparator;
+import org.apache.lucene.search.comparators.IntComparator;
+import org.apache.lucene.search.comparators.LongComparator;
+import org.apache.lucene.store.DataInput;
+import org.apache.lucene.store.DataOutput;
 import org.apache.lucene.util.BytesRef;
+import org.apache.lucene.util.NumericUtils;
 
 /**
  * Stores information about how to sort documents by terms in an individual
@@ -98,6 +109,11 @@ public class SortField {
   // Used for 'sortMissingFirst/Last'
   protected Object missingValue = null;
 
+  // For numeric sort fields, if true, indicates the DocValues and Point fields
+  // with the same name have the exactly same data indexed.
+  // This allows to use them to optimize sort and skip non-competitive documents.
+  private boolean canUsePoints = false;
+
   /** Creates a sort by terms in the given field with the type of term
    * values explicitly given.
    * @param field  Name of field to sort by.  Can be <code>null</code> if
@@ -118,6 +134,106 @@ public class SortField {
   public SortField(String field, Type type, boolean reverse) {
     initFieldType(field, type);
     this.reverse = reverse;
+  }
+
+  /** A SortFieldProvider for field sorts */
+  public static final class Provider extends SortFieldProvider {
+
+    /** The name this Provider is registered under */
+    public static final String NAME = "SortField";
+
+    /** Creates a new Provider */
+    public Provider() {
+      super(NAME);
+    }
+
+    @Override
+    public SortField readSortField(DataInput in) throws IOException {
+      SortField sf = new SortField(in.readString(), readType(in), in.readInt() == 1);
+      if (in.readInt() == 1) {
+        // missing object
+        switch (sf.type) {
+          case STRING:
+            int missingString = in.readInt();
+            if (missingString == 1) {
+              sf.setMissingValue(STRING_FIRST);
+            }
+            else {
+              sf.setMissingValue(STRING_LAST);
+            }
+            break;
+          case INT:
+            sf.setMissingValue(in.readInt());
+            break;
+          case LONG:
+            sf.setMissingValue(in.readLong());
+            break;
+          case FLOAT:
+            sf.setMissingValue(NumericUtils.sortableIntToFloat(in.readInt()));
+            break;
+          case DOUBLE:
+            sf.setMissingValue(NumericUtils.sortableLongToDouble(in.readLong()));
+            break;
+          default:
+            throw new IllegalArgumentException("Cannot deserialize sort of type " + sf.type);
+        }
+      }
+      return sf;
+    }
+
+    @Override
+    public void writeSortField(SortField sf, DataOutput out) throws IOException {
+      sf.serialize(out);
+    }
+  }
+
+  protected static Type readType(DataInput in) throws IOException {
+    String type = in.readString();
+    try {
+      return Type.valueOf(type);
+    }
+    catch (IllegalArgumentException e) {
+      throw new IllegalArgumentException("Can't deserialize SortField - unknown type " + type);
+    }
+  }
+
+  private void serialize(DataOutput out) throws IOException {
+    out.writeString(field);
+    out.writeString(type.toString());
+    out.writeInt(reverse ? 1 : 0);
+    if (missingValue == null) {
+      out.writeInt(0);
+    }
+    else {
+      out.writeInt(1);
+      switch (type) {
+        case STRING:
+          if (missingValue == STRING_LAST) {
+            out.writeInt(0);
+          }
+          else if (missingValue == STRING_FIRST) {
+            out.writeInt(1);
+          }
+          else {
+            throw new IllegalArgumentException("Cannot serialize missing value of " + missingValue + " for type STRING");
+          }
+          break;
+        case INT:
+          out.writeInt((int)missingValue);
+          break;
+        case LONG:
+          out.writeLong((long)missingValue);
+          break;
+        case FLOAT:
+          out.writeInt(NumericUtils.floatToSortableInt((float)missingValue));
+          break;
+        case DOUBLE:
+          out.writeLong(NumericUtils.doubleToSortableLong((double)missingValue));
+          break;
+        default:
+          throw new IllegalArgumentException("Cannot serialize SortField of type " + type);
+      }
+    }
   }
 
   /** Pass this to {@link #setMissingValue} to have missing
@@ -288,9 +404,29 @@ public class SortField {
     return buffer.toString();
   }
 
+
+  /**
+   * For numeric sort fields, setting this field, indicates that
+   * the same numeric data has been indexed with two fields: doc values and points and
+   * that these fields have the same name.
+   * This allows to use sort optimization and skip non-competitive documents.
+   */
+  public void setCanUsePoints() {
+    this.canUsePoints = true;
+  }
+
+  public boolean getCanUsePoints() {
+    return canUsePoints;
+  }
+
   /** Returns true if <code>o</code> is equal to this.  If a
    *  {@link FieldComparatorSource} was provided, it must properly
-   *  implement equals (unless a singleton is always used). */
+   *  implement equals (unless a singleton is always used).
+   *  <code>canUsePoints</code> field is not part of <code>equals</code> and
+   *  <code>hasCode</code> intentionally, as it is only useful during search-time and
+   *  using it in these functions prevents index sorting optimizations
+   *  that rely on the equality of the index-time and search-time SortField instances.
+   */
   @Override
   public boolean equals(Object o) {
     if (this == o) return true;
@@ -342,19 +478,19 @@ public class SortField {
       return new FieldComparator.RelevanceComparator(numHits);
 
     case DOC:
-      return new FieldComparator.DocComparator(numHits);
+      return new DocComparator(numHits, reverse, sortPos);
 
     case INT:
-      return new FieldComparator.IntComparator(numHits, field, (Integer) missingValue);
+      return new IntComparator(numHits, field, (Integer) missingValue, reverse, sortPos);
 
     case FLOAT:
-      return new FieldComparator.FloatComparator(numHits, field, (Float) missingValue);
+      return new FloatComparator(numHits, field, (Float) missingValue, reverse, sortPos);
 
     case LONG:
-      return new FieldComparator.LongComparator(numHits, field, (Long) missingValue);
+      return new LongComparator(numHits, field, (Long) missingValue, reverse, sortPos);
 
     case DOUBLE:
-      return new FieldComparator.DoubleComparator(numHits, field, (Double) missingValue);
+      return new DoubleComparator(numHits, field, (Double) missingValue, reverse, sortPos);
 
     case CUSTOM:
       assert comparatorSource != null;
@@ -392,4 +528,33 @@ public class SortField {
   public boolean needsScores() {
     return type == Type.SCORE;
   }
+
+  /**
+   * Returns an {@link IndexSorter} used for sorting index segments by this SortField.
+   *
+   * If the SortField cannot be used for index sorting (for example, if it uses scores or
+   * other query-dependent values) then this method should return {@code null}
+   *
+   * SortFields that implement this method should also implement a companion
+   * {@link SortFieldProvider} to serialize and deserialize the sort in index segment
+   * headers
+   *
+   * @lucene.experimental
+   */
+  public IndexSorter getIndexSorter() {
+    switch (type) {
+      case STRING:
+        return new IndexSorter.StringSorter(Provider.NAME, missingValue, reverse, reader -> DocValues.getSorted(reader, field));
+      case INT:
+        return new IndexSorter.IntSorter(Provider.NAME, (Integer)missingValue, reverse, reader -> DocValues.getNumeric(reader, field));
+      case LONG:
+        return new IndexSorter.LongSorter(Provider.NAME, (Long)missingValue, reverse, reader -> DocValues.getNumeric(reader, field));
+      case DOUBLE:
+        return new IndexSorter.DoubleSorter(Provider.NAME, (Double)missingValue, reverse, reader -> DocValues.getNumeric(reader, field));
+      case FLOAT:
+        return new IndexSorter.FloatSorter(Provider.NAME, (Float)missingValue, reverse, reader -> DocValues.getNumeric(reader, field));
+      default: return null;
+    }
+  }
+
 }

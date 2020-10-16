@@ -209,7 +209,6 @@
                    doctype="book"
                    safemode="unsafe">
         <attribute key="attribute-missing" value="warn" />
-        <attribute key="section-toc" value='' />
         <attribute key="icons" value="font" />
         <attribute key="icon-set" value="fa" />
         <attribute key="figure-caption!" value='' />
@@ -234,7 +233,7 @@
         <attribute key="ivy-opennlp-version" value="${ivyversions./org.apache.opennlp/opennlp-tools}" />
         <attribute key="ivy-tika-version" value="${ivyversions.org.apache.tika.version}" />
         <attribute key="ivy-velocity-tools-version" value="${ivyversions.org.apache.velocity.tools.version}" />
-        <attribute key="ivy-zookeeper-version" value="${ivyversions./org.apache.zookeeper/zookeeper}" />
+        <attribute key="ivy-zookeeper-version" value="${ivyversions.org.apache.zookeeper.version}" />
       </asciidoctor:convert>
     </sequential>
   </macrodef>

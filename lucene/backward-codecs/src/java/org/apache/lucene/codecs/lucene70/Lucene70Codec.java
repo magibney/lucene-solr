@@ -81,7 +81,7 @@ public class Lucene70Codec extends Codec {
   }
   
   @Override
-  public final StoredFieldsFormat storedFieldsFormat() {
+  public StoredFieldsFormat storedFieldsFormat() {
     return storedFieldsFormat;
   }
   
@@ -91,7 +91,7 @@ public class Lucene70Codec extends Codec {
   }
 
   @Override
-  public final PostingsFormat postingsFormat() {
+  public PostingsFormat postingsFormat() {
     return postingsFormat;
   }
   
@@ -101,7 +101,7 @@ public class Lucene70Codec extends Codec {
   }
   
   @Override
-  public final SegmentInfoFormat segmentInfoFormat() {
+  public SegmentInfoFormat segmentInfoFormat() {
     return segmentInfosFormat;
   }
   

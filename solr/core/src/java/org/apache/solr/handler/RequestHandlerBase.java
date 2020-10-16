@@ -30,6 +30,7 @@ import org.apache.solr.api.Api;
 import org.apache.solr.api.ApiBag;
 import org.apache.solr.api.ApiSupport;
 import org.apache.solr.common.SolrException;
+import org.apache.solr.common.params.CommonParams;
 import org.apache.solr.common.params.ShardParams;
 import org.apache.solr.common.params.SolrParams;
 import org.apache.solr.common.util.NamedList;
@@ -55,6 +56,7 @@ import static org.apache.solr.core.RequestParams.USEPARAM;
  */
 public abstract class RequestHandlerBase implements SolrRequestHandler, SolrInfoBean, SolrMetricProducer, NestedRequestHandler, ApiSupport {
 
+  @SuppressWarnings({"rawtypes"})
   protected NamedList initArgs = null;
   protected SolrParams defaults;
   protected SolrParams appends;
@@ -69,7 +71,11 @@ public abstract class RequestHandlerBase implements SolrRequestHandler, SolrInfo
   private Counter requests = new Counter();
   private final Map<String, Counter> shardPurposes = new ConcurrentHashMap<>();
   private Timer requestTimes = new Timer();
+  private Timer distribRequestTimes = new Timer();
+  private Timer localRequestTimes = new Timer();
   private Counter totalTime = new Counter();
+  private Counter distribTotalTime = new Counter();
+  private Counter localTotalTime = new Counter();
 
   private final long handlerStart;
 
@@ -124,7 +130,7 @@ public abstract class RequestHandlerBase implements SolrRequestHandler, SolrInfo
    * See also the example solrconfig.xml located in the Solr codebase (example/solr/conf).
    */
   @Override
-  public void init(NamedList args) {
+  public void init(@SuppressWarnings({"rawtypes"})NamedList args) {
     initArgs = args;
 
     if (args != null) {
@@ -153,15 +159,19 @@ public abstract class RequestHandlerBase implements SolrRequestHandler, SolrInfo
     numClientErrors = solrMetricsContext.meter(this, "clientErrors", getCategory().toString(), scope);
     numTimeouts = solrMetricsContext.meter(this, "timeouts", getCategory().toString(), scope);
     requests = solrMetricsContext.counter(this, "requests", getCategory().toString(), scope);
-    MetricsMap metricsMap = new MetricsMap((detail, map) ->
-        shardPurposes.forEach((k, v) -> map.put(k, v.getCount())));
+    MetricsMap metricsMap = new MetricsMap(map ->
+        shardPurposes.forEach((k, v) -> map.putNoEx(k, v.getCount())));
     solrMetricsContext.gauge(this, metricsMap, true, "shardRequests", getCategory().toString(), scope);
-    requestTimes = solrMetricsContext.timer(this,"requestTimes", getCategory().toString(), scope);
+    requestTimes = solrMetricsContext.timer(this, "requestTimes", getCategory().toString(), scope);
+    distribRequestTimes = solrMetricsContext.timer(this, "requestTimes", getCategory().toString(), scope, "distrib");
+    localRequestTimes = solrMetricsContext.timer(this, "requestTimes", getCategory().toString(), scope, "local");
     totalTime = solrMetricsContext.counter(this, "totalTime", getCategory().toString(), scope);
+    distribTotalTime = solrMetricsContext.counter(this, "totalTime", getCategory().toString(), scope, "distrib");
+    localTotalTime = solrMetricsContext.counter(this, "totalTime", getCategory().toString(), scope, "local");
     solrMetricsContext.gauge(this, () -> handlerStart, true, "handlerStart", getCategory().toString(), scope);
   }
 
-  public static SolrParams getSolrParamsFromNamedList(NamedList args, String key) {
+  public static SolrParams getSolrParamsFromNamedList(@SuppressWarnings({"rawtypes"})NamedList args, String key) {
     Object o = args.get(key);
     if (o != null && o instanceof NamedList) {
       return ((NamedList) o).toSolrParams();
@@ -169,6 +179,7 @@ public abstract class RequestHandlerBase implements SolrRequestHandler, SolrInfo
     return null;
   }
 
+  @SuppressWarnings({"rawtypes"})
   public NamedList getInitArgs() {
     return initArgs;
   }
@@ -178,6 +189,9 @@ public abstract class RequestHandlerBase implements SolrRequestHandler, SolrInfo
   @Override
   public void handleRequest(SolrQueryRequest req, SolrQueryResponse rsp) {
     requests.inc();
+    // requests are distributed by default when ZK is in use, unless indicated otherwise
+    boolean distrib = req.getParams().getBool(CommonParams.DISTRIB,
+        req.getCore() != null ? req.getCore().getCoreContainer().isZooKeeperAware() : false);
     if (req.getParams().getBool(ShardParams.IS_SHARD, false)) {
       shardPurposes.computeIfAbsent("total", name -> new Counter()).inc();
       int purpose = req.getParams().getInt(ShardParams.SHARDS_PURPOSE, 0);
@@ -189,6 +203,8 @@ public abstract class RequestHandlerBase implements SolrRequestHandler, SolrInfo
       }
     }
     Timer.Context timer = requestTimes.time();
+    @SuppressWarnings("resource")
+    Timer.Context dTimer = distrib ? distribRequestTimes.time() : localRequestTimes.time();
     try {
       if (pluginInfo != null && pluginInfo.attributes.containsKey(USEPARAM))
         req.getContext().put(USEPARAM, pluginInfo.attributes.get(USEPARAM));
@@ -197,6 +213,7 @@ public abstract class RequestHandlerBase implements SolrRequestHandler, SolrInfo
       rsp.setHttpCaching(httpCaching);
       handleRequestBody(req, rsp);
       // count timeouts
+      @SuppressWarnings({"rawtypes"})
       NamedList header = rsp.getResponseHeader();
       if (header != null) {
         if (Boolean.TRUE.equals(header.getBooleanArg(
@@ -247,8 +264,14 @@ public abstract class RequestHandlerBase implements SolrRequestHandler, SolrInfo
         }
       }
     } finally {
+      dTimer.stop();
       long elapsed = timer.stop();
       totalTime.inc(elapsed);
+      if (distrib) {
+        distribTotalTime.inc(elapsed);
+      } else {
+        localTotalTime.inc(elapsed);
+      }
     }
   }
 

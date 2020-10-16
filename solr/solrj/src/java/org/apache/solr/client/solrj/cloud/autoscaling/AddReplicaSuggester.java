@@ -29,15 +29,22 @@ import org.apache.solr.common.util.Pair;
 
 import static org.apache.solr.common.params.CollectionParams.CollectionAction.ADDREPLICA;
 
+/**
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
+ */
 class AddReplicaSuggester extends Suggester {
 
+  @SuppressWarnings({"rawtypes"})
   SolrRequest init() {
     SolrRequest operation = tryEachNode(true);
     if (operation == null) operation = tryEachNode(false);
     return operation;
   }
 
+  @SuppressWarnings({"rawtypes"})
   SolrRequest tryEachNode(boolean strict) {
+    @SuppressWarnings({"unchecked"})
     Set<Pair<String, String>> shards = (Set<Pair<String, String>>) hints.getOrDefault(Hint.COLL_SHARD, Collections.emptySet());
     if (shards.isEmpty()) {
       throw new RuntimeException("add-replica requires 'collection' and 'shard'");

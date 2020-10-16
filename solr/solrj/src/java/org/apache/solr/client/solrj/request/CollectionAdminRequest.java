@@ -110,6 +110,7 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
   }
 
   @Override
+  @SuppressWarnings({"rawtypes"})
   public SolrRequest getV2Request() {
     return usev2 ?
         V1toV2ApiMapper.convert(this).useBinary(useBinaryV2).build() :
@@ -294,6 +295,7 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
     }
   }
 
+  @SuppressWarnings({"rawtypes"})
   protected abstract static class ShardSpecificAdminRequest extends CollectionAdminRequest {
 
     protected String collection;
@@ -910,13 +912,23 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
   }
 
   /**
-   * Return a SolrRequest for low-level detailed status of the collection.
+   * Return a SolrRequest for low-level detailed status of the specified collection. 
+   * @param collection the collection to get the status of.
    */
   public static ColStatus collectionStatus(String collection) {
+    checkNotNull(CoreAdminParams.COLLECTION, collection);
     return new ColStatus(collection);
   }
+  
+  /**
+   * Return a SolrRequest for low-level detailed status of all collections on the cluster.
+   */
+  public static ColStatus collectionStatuses() {
+    return new ColStatus();
+  }
 
-  public static class ColStatus extends AsyncCollectionSpecificAdminRequest {
+  public static class ColStatus extends AsyncCollectionAdminRequest {
+    protected String collection = null;
     protected Boolean withSegments = null;
     protected Boolean withFieldInfo = null;
     protected Boolean withCoreInfo = null;
@@ -927,7 +939,12 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
     protected Float rawSizeSamplingPercent = null;
 
     private ColStatus(String collection) {
-      super(CollectionAction.COLSTATUS, collection);
+      super(CollectionAction.COLSTATUS);
+      this.collection = collection;
+    }
+    
+    private ColStatus() {
+      super(CollectionAction.COLSTATUS);
     }
 
     public ColStatus setWithSegments(boolean withSegments) {
@@ -973,6 +990,7 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
     @Override
     public SolrParams getParams() {
       ModifiableSolrParams params = (ModifiableSolrParams)super.getParams();
+      params.setNonNull(CoreAdminParams.COLLECTION, collection);
       params.setNonNull("segments", withSegments);
       params.setNonNull("fieldInfo", withFieldInfo);
       params.setNonNull("coreInfo", withCoreInfo);
@@ -1535,6 +1553,7 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
   public static class RequestStatusResponse extends CollectionAdminResponse {
 
     public RequestStatusState getRequestStatus() {
+      @SuppressWarnings({"rawtypes"})
       NamedList innerResponse = (NamedList) getResponse().get("status");
       return RequestStatusState.fromKey((String) innerResponse.get("state"));
     }
@@ -2682,6 +2701,7 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
   /**
    * Returns a SolrRequest to get a list of collections in the cluster
    */
+  @SuppressWarnings({"unchecked"})
   public static java.util.List<String> listCollections(SolrClient client) throws IOException, SolrServerException {
     CollectionAdminResponse resp = new List().process(client);
     return (java.util.List<String>) resp.getResponse().get("collections");

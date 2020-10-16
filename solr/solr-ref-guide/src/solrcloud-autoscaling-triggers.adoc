@@ -1,5 +1,4 @@
 = SolrCloud Autoscaling Triggers
-:page-tocclass: right
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -16,6 +15,14 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
+[WARNING]
+.Autoscaling is deprecated
+====
+The autoscaling framework in its current form is deprecated and will be removed in Solr 9.0.
+
+A new design for this feature is currently under development in https://issues.apache.org/jira/browse/SOLR-14613[SOLR-14613] with a goal for release with Solr 9.0.
+====
 
 Triggers are used in autoscaling to watch for cluster events such as nodes joining or leaving, search rate, index rate, on a schedule, or any other metric breaching a threshold.
 
@@ -566,7 +573,7 @@ are not used with low `every` values and an external scheduling process such as 
 ====
 
 == Default Triggers
-A fresh installation of SolrCloud always creates some default triggers. If these triggers are missing (eg. they were
+A fresh installation of SolrCloud always creates some default triggers. If these triggers are missing (e.g., they were
 deleted) they are re-created on any autoscaling configuration change or Overseer restart. These triggers can be
 suspended if their functionality somehow interferes with other configuration but they can't be permanently deleted.
 
@@ -598,7 +605,7 @@ Overseer leader such event may not be properly processed by the triggers (which 
 For this reason a special marker is created in ZooKeeper so that when the next Overseer leader is elected the
 triggers will be able to learn about and process these past events.
 
-Triggers don't delete these markers once they are done processing (because several triggers may need them and eg.
+Triggers don't delete these markers once they are done processing (because several triggers may need them and e.g.,
 scheduled triggers may run at arbitrary times with arbitrary delays) so Solr needs a mechanism to clean up
 old markers for such events so that they don't accumulate over time. This trigger action performs the clean-up
 - it deletes markers older than the configured time-to-live (by default it's 48 hours).

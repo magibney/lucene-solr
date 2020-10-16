@@ -49,6 +49,8 @@ import org.slf4j.LoggerFactory;
  * Simulated {@link DistributedQueueFactory} that keeps all data in memory. Unlike
  * the {@link GenericDistributedQueueFactory} this queue implementation data is not
  * exposed anywhere.
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 public class SimDistributedQueueFactory implements DistributedQueueFactory {
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
@@ -184,13 +186,16 @@ public class SimDistributedQueueFactory implements DistributedQueueFactory {
     }
 
     @Override
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public void offer(byte[] data) throws Exception {
       Timer.Context time = stats.time(dir + "_offer");
       updateLock.lockInterruptibly();
       try {
         queue.offer(new Pair(String.format(Locale.ROOT, "qn-%010d", seq), data));
         seq++;
-        log.trace("=== offer " + System.nanoTime());
+        if (log.isTraceEnabled()) {
+          log.trace("=== offer {}", System.nanoTime());
+        }
         changed.signalAll();
       } finally {
         updateLock.unlock();

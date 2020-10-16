@@ -49,7 +49,6 @@ import org.eclipse.jetty.servlet.ServletHolder;
 import org.junit.After;
 import org.junit.Before;
 import org.noggit.JSONParser;
-import org.restlet.ext.servlet.ServerServlet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -75,9 +74,6 @@ public class TestSolrConfigHandler extends RestTestBase {
     FileUtils.copyDirectory(new File(TEST_HOME()), tmpSolrHome.getAbsoluteFile());
 
     final SortedMap<ServletHolder, String> extraServlets = new TreeMap<>();
-    final ServletHolder solrRestApi = new ServletHolder("SolrSchemaRestApi", ServerServlet.class);
-    solrRestApi.setInitParameter("org.restlet.application", "org.apache.solr.rest.SolrSchemaRestApi");
-    extraServlets.put(solrRestApi, "/schema/*");  // '/schema/*' matches '/schema', '/schema/', and '/schema/whatever...'
 
     System.setProperty("managed.schema.mutable", "true");
     System.setProperty("enable.update.log", "false");
@@ -171,6 +167,7 @@ public class TestSolrConfigHandler extends RestTestBase {
     reqhandlertests(restTestHarness, null, null);
   }
 
+  @SuppressWarnings({"rawtypes"})
   public static Map runConfigCommand(RestTestHarness harness, String uri, String payload) throws IOException {
     String json = SolrTestCaseJ4.json(payload);
     log.info("going to send config command. path {} , payload: {}", uri, payload);
@@ -185,11 +182,14 @@ public class TestSolrConfigHandler extends RestTestBase {
     String json = SolrTestCaseJ4.json(payload);
     log.info("going to send config command. path {} , payload: {}", uri, payload);
     String response = harness.post(uri, json);
+    @SuppressWarnings({"rawtypes"})
     Map map = (Map)Utils.fromJSONString(response);
     assertNotNull(response, map.get("errorMessages"));
     assertNotNull(response, map.get("error"));
     assertTrue("Expected status != 0: " + response, 0L != (Long)((Map)map.get("responseHeader")).get("status"));
+    @SuppressWarnings({"rawtypes"})
     List errorDetails = (List)((Map)map.get("error")).get("details");
+    @SuppressWarnings({"rawtypes"})
     List errorMessages = (List)((Map)errorDetails.get(0)).get("errorMessages");
     assertTrue("Expected '" + expectedErrorMessage + "': " + response, 
         errorMessages.get(0).toString().contains(expectedErrorMessage));
@@ -264,6 +264,7 @@ public class TestSolrConfigHandler extends RestTestBase {
     int maxTimeoutSeconds = 10;
     while (TimeUnit.SECONDS.convert(System.nanoTime() - startTime, TimeUnit.NANOSECONDS) < maxTimeoutSeconds) {
       String uri = "/config/overlay";
+      @SuppressWarnings({"rawtypes"})
       Map m = testServerBaseUrl == null ? getRespMap(uri, writeHarness) : TestSolrConfigHandlerConcurrent.getAsMap(testServerBaseUrl + uri, cloudSolrClient);
       if (null == Utils.getObjectByPath(m, true, asList("overlay", "requestHandler", "/x", "a"))) {
         success = true;
@@ -413,6 +414,7 @@ public class TestSolrConfigHandler extends RestTestBase {
         "'create-initparams' : { 'name' : 'hello', 'key':'val'}\n" +
         "}";
     runConfigCommand(writeHarness, "/config", payload);
+    @SuppressWarnings({"rawtypes"})
     Map map = testForResponseElement(writeHarness,
         testServerBaseUrl,
         "/config",
@@ -421,6 +423,7 @@ public class TestSolrConfigHandler extends RestTestBase {
         null,
         TIMEOUT_S);
 
+    @SuppressWarnings({"rawtypes"})
     List l = (List) Utils.getObjectByPath(map, false, asList("config", "initParams"));
     assertNotNull("no object /config/initParams : "+ map , l);
     assertEquals( 2, l.size());
@@ -467,6 +470,7 @@ public class TestSolrConfigHandler extends RestTestBase {
         TIMEOUT_S);
 
     map = getRespMap("/dump100?json.nl=arrmap&initArgs=true", writeHarness);
+    @SuppressWarnings({"rawtypes"})
     List initArgs = (List) map.get("initArgs");
     assertNotNull(initArgs);
     assertTrue(initArgs.size() >= 2);
@@ -536,13 +540,16 @@ public class TestSolrConfigHandler extends RestTestBase {
 
   public static class CacheTest extends DumpRequestHandler {
     @Override
+    @SuppressWarnings({"unchecked"})
     public void handleRequestBody(SolrQueryRequest req, SolrQueryResponse rsp) throws IOException {
       super.handleRequestBody(req, rsp);
       String[] caches = req.getParams().getParams("cacheNames");
       if(caches != null && caches.length>0){
+        @SuppressWarnings({"rawtypes"})
         HashMap m = new HashMap();
         rsp.add("caches", m);
         for (String c : caches) {
+          @SuppressWarnings({"rawtypes"})
           SolrCache cache = req.getSearcher().getCache(c);
           if(cache != null) m.put(c, cache.getClass().getName());
         }
@@ -550,6 +557,7 @@ public class TestSolrConfigHandler extends RestTestBase {
     }
   }
 
+  @SuppressWarnings({"unchecked", "rawtypes"})
   public static LinkedHashMapWriter testForResponseElement(RestTestHarness harness,
                                            String testServerBaseUrl,
                                            String uri,
@@ -830,6 +838,7 @@ public class TestSolrConfigHandler extends RestTestBase {
     RESTfulServerProvider oldProvider = restTestHarness.getServerProvider();
     restTestHarness.setServerProvider(() -> jetty.getBaseUrl().toString() + "/____v2/cores/" + DEFAULT_TEST_CORENAME);
 
+    @SuppressWarnings({"rawtypes"})
     Map rsp = TestSolrConfigHandler.testForResponseElement(
         harness,
         null,
@@ -858,6 +867,7 @@ public class TestSolrConfigHandler extends RestTestBase {
   }
 
 
+  @SuppressWarnings({"rawtypes"})
   public static LinkedHashMapWriter getRespMap(String path, RestTestHarness restHarness) throws Exception {
     String response = restHarness.query(path);
     try {

@@ -119,7 +119,7 @@ public abstract class FieldValueHitQueue<T extends FieldValueHitQueue.Entry> ext
     }
     
   }
-  
+
   // prevent instantiation and extension.
   private FieldValueHitQueue(SortField[] fields, int size) {
     super(size);
@@ -135,9 +135,18 @@ public abstract class FieldValueHitQueue<T extends FieldValueHitQueue.Entry> ext
     reverseMul = new int[numComparators];
     for (int i = 0; i < numComparators; ++i) {
       SortField field = fields[i];
-
       reverseMul[i] = field.reverse ? -1 : 1;
+      //TODO: field.getCanUsePoints()
       comparators[i] = field.getComparator(size, i);
+    }
+    if (numComparators > 0 && fields[0].getCanUsePoints()) {
+      // inform a numeric comparator that it can use points for sort optimization
+      comparators[0].setCanUsePoints();
+    }
+    if (numComparators == 1) {
+      // inform a comparator that sort is based on this single field
+      // to enable some optimizations for skipping over non-competitive documents
+      comparators[0].setSingleSort();
     }
   }
 

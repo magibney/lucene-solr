@@ -1,6 +1,5 @@
 = Autoscaling API
-:page-toclevels: 2
-:page-tocclass: right
+:toclevels: 2
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -17,6 +16,14 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
+[WARNING]
+.Autoscaling is deprecated
+====
+The autoscaling framework in its current form is deprecated and will be removed in Solr 9.0.
+
+A new design for this feature is currently under development in https://issues.apache.org/jira/browse/SOLR-14613[SOLR-14613] with a goal for release with Solr 9.0.
+====
 
 The Autoscaling API is used to manage autoscaling policies, preferences, triggers, listeners and to get diagnostics on the state of the cluster.
 

@@ -50,6 +50,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Read-only snapshot of another {@link DistribStateManager}
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 public class SnapshotDistribStateManager implements DistribStateManager {
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
@@ -63,7 +65,9 @@ public class SnapshotDistribStateManager implements DistribStateManager {
    */
   public SnapshotDistribStateManager(DistribStateManager other, AutoScalingConfig config) throws Exception {
     List<String> tree = other.listTree("/");
-    log.debug("- copying {} resources from {}", tree.size(), other.getClass().getSimpleName());
+    if (log.isDebugEnabled()) {
+      log.debug("- copying {} resources from {}", tree.size(), other.getClass().getSimpleName());
+    }
     for (String path : tree) {
       dataMap.put(path, other.getData(path));
     }
@@ -87,6 +91,7 @@ public class SnapshotDistribStateManager implements DistribStateManager {
    */
   public SnapshotDistribStateManager(Map<String, Object> snapshot, AutoScalingConfig config) {
     snapshot.forEach((path, value) -> {
+      @SuppressWarnings({"unchecked"})
       Map<String, Object> map = (Map<String, Object>)value;
       Number version = (Number)map.getOrDefault("version", 0);
       String owner = (String)map.get("owner");
@@ -102,7 +107,9 @@ public class SnapshotDistribStateManager implements DistribStateManager {
       VersionedData vd = new VersionedData(config.getZkVersion(), Utils.toJSON(config), CreateMode.PERSISTENT, "0");
       dataMap.put(ZkStateReader.SOLR_AUTOSCALING_CONF_PATH, vd);
     }
-    log.debug("- loaded snapshot of {} resources", dataMap.size());
+    if (log.isDebugEnabled()) {
+      log.debug("- loaded snapshot of {} resources", dataMap.size());
+    }
   }
 
   // content of these nodes is a UTF-8 String and it needs to be redacted
@@ -206,6 +213,7 @@ public class SnapshotDistribStateManager implements DistribStateManager {
   }
 
   @Override
+  @SuppressWarnings({"unchecked"})
   public AutoScalingConfig getAutoScalingConfig(Watcher watcher) throws InterruptedException, IOException {
     VersionedData vd = dataMap.get(ZkStateReader.SOLR_AUTOSCALING_CONF_PATH);
     Map<String, Object> map = new HashMap<>();

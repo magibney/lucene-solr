@@ -22,6 +22,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import org.apache.lucene.analysis.MockAnalyzer;
 import org.apache.lucene.codecs.Codec;
@@ -43,12 +44,13 @@ public class TestIndexWriterConfig extends LuceneTestCase {
   }
 
   private static final class MyIndexingChain extends IndexingChain {
-    // Does not implement anything - used only for type checking on IndexWriterConfig.
-
     @Override
-    DocConsumer getChain(DocumentsWriterPerThread documentsWriter) {
+    DocConsumer getChain(int indexCreatedVersionMajor, SegmentInfo segmentInfo, Directory directory,
+                         FieldInfos.Builder fieldInfos, LiveIndexWriterConfig indexWriterConfig,
+                         Consumer<Throwable> abortingExceptionConsumer) {
       return null;
     }
+    // Does not implement anything - used only for type checking on IndexWriterConfig.
 
   }
 
@@ -68,7 +70,6 @@ public class TestIndexWriterConfig extends LuceneTestCase {
     assertTrue(DocumentsWriterPerThread.defaultIndexingChain == conf.getIndexingChain());
     assertNull(conf.getMergedSegmentWarmer());
     assertEquals(TieredMergePolicy.class, conf.getMergePolicy().getClass());
-    assertEquals(DocumentsWriterPerThreadPool.class, conf.getIndexerThreadPool().getClass());
     assertEquals(FlushByRamOrCountsPolicy.class, conf.getFlushPolicy().getClass());
     assertEquals(IndexWriterConfig.DEFAULT_RAM_PER_THREAD_HARD_LIMIT_MB, conf.getRAMPerThreadHardLimitMB());
     assertEquals(Codec.getDefault(), conf.getCodec());

@@ -239,9 +239,21 @@ public class FunctionQParser extends QParser {
    * @return List&lt;ValueSource&gt;
    */
   public List<ValueSource> parseValueSourceList() throws SyntaxError {
+    return parseValueSourceList(FLAG_DEFAULT | FLAG_CONSUME_DELIMITER);
+  }
+
+  /**
+   * Parse a list of ValueSource.  Must be the final set of arguments
+   * to a ValueSource.
+   *
+   * @param flags - customize parsing behavior
+   *
+   * @return List&lt;ValueSource&gt;
+   */
+  public List<ValueSource> parseValueSourceList(int flags) throws SyntaxError {
     List<ValueSource> sources = new ArrayList<>(3);
     while (hasMoreArguments()) {
-      sources.add(parseValueSource(FLAG_DEFAULT | FLAG_CONSUME_DELIMITER));
+      sources.add(parseValueSource(flags));
     }
     return sources;
   }
@@ -424,31 +436,33 @@ public class FunctionQParser extends QParser {
 
   /** @lucene.experimental */
   public AggValueSource parseAgg(int flags) throws SyntaxError {
-    String id = sp.getId();
+    String origId = sp.getId();
     AggValueSource vs = null;
-    boolean hasParen = false;
+    boolean hasParen;
 
-    if ("agg".equals(id)) {
+    if ("agg".equals(origId)) {
       hasParen = sp.opt("(");
       vs = parseAgg(flags | FLAG_IS_AGG);
     } else {
       // parse as an aggregation...
-      if (!id.startsWith("agg_")) {
-        id = "agg_" + id;
-      }
-
+      String id = origId.startsWith("agg_")? origId: "agg_" + origId;
       hasParen = sp.opt("(");
 
       ValueSourceParser argParser = req.getCore().getValueSourceParser(id);
       if (argParser == null) {
-        throw new SyntaxError("Unknown aggregation " + id + " in (" + sp + ")");
+        argParser = req.getCore().getValueSourceParser(origId);
+        if (argParser == null) {
+          throw new SyntaxError("Unknown aggregation '" + origId + "' in input (" + sp + ")");
+        } else {
+          throw new SyntaxError("Expected multi-doc aggregation from '" +  origId +
+              "' but got per-doc function in input (" + sp + ")");
+        }
       }
 
       ValueSource vv = argParser.parse(this);
       if (!(vv instanceof AggValueSource)) {
-        if (argParser == null) { // why this??
-          throw new SyntaxError("Expected aggregation from " + id + " but got (" + vv + ") in (" + sp + ")");
-        }
+        throw new SyntaxError("Expected multi-doc aggregation from '" + origId +
+            "' but got (" + vv + ") in (" + sp + ")");
       }
       vs = (AggValueSource) vv;
     }

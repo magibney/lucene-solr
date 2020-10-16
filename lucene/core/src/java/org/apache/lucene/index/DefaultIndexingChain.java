@@ -21,13 +21,14 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
+import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import java.util.Objects;
+import java.util.function.Consumer;
 
+import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.codecs.DocValuesConsumer;
 import org.apache.lucene.codecs.DocValuesFormat;
@@ -40,29 +41,34 @@ import org.apache.lucene.document.FieldType;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortField;
-import org.apache.lucene.search.SortedNumericSortField;
-import org.apache.lucene.search.SortedSetSortField;
 import org.apache.lucene.search.similarities.Similarity;
+import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.IOContext;
+import org.apache.lucene.util.Accountable;
 import org.apache.lucene.util.ArrayUtil;
+import org.apache.lucene.util.ByteBlockPool;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefHash.MaxBytesLengthExceededException;
 import org.apache.lucene.util.Counter;
 import org.apache.lucene.util.IOUtils;
+import org.apache.lucene.util.InfoStream;
+import org.apache.lucene.util.IntBlockPool;
 import org.apache.lucene.util.RamUsageEstimator;
 
 /** Default general purpose indexing chain, which handles
  *  indexing all types of fields. */
 final class DefaultIndexingChain extends DocConsumer {
-  final Counter bytesUsed;
-  final DocumentsWriterPerThread.DocState docState;
-  final DocumentsWriterPerThread docWriter;
+
+
+  final Counter bytesUsed = Counter.newCounter();
   final FieldInfos.Builder fieldInfos;
 
   // Writes postings and term vectors:
   final TermsHash termsHash;
   // Writes stored fields
   final StoredFieldsConsumer storedFieldsConsumer;
+  final TermVectorsConsumer termVectorsWriter;
+
 
   // NOTE: I tried using Hash Map<String,PerField>
   // but it was ~2% slower on Wiki and Geonames with Java
@@ -75,24 +81,108 @@ final class DefaultIndexingChain extends DocConsumer {
 
   // Holds fields seen in each document
   private PerField[] fields = new PerField[1];
+  private final InfoStream infoStream;
+  private final ByteBlockPool.Allocator byteBlockAllocator;
+  private final LiveIndexWriterConfig indexWriterConfig;
+  private final int indexCreatedVersionMajor;
+  private final Consumer<Throwable> abortingExceptionConsumer;
+  private boolean hasHitAbortingException;
 
-  private final Set<String> finishedDocValues = new HashSet<>();
+  DefaultIndexingChain(int indexCreatedVersionMajor, SegmentInfo segmentInfo, Directory directory, FieldInfos.Builder fieldInfos, LiveIndexWriterConfig indexWriterConfig,
+                       Consumer<Throwable> abortingExceptionConsumer) {
+    this.indexCreatedVersionMajor = indexCreatedVersionMajor;
+    byteBlockAllocator = new ByteBlockPool.DirectTrackingAllocator(bytesUsed);
+    IntBlockPool.Allocator intBlockAllocator = new IntBlockAllocator(bytesUsed);
+    this.indexWriterConfig = indexWriterConfig;
+    assert segmentInfo.getIndexSort() == indexWriterConfig.getIndexSort();
+    this.fieldInfos = fieldInfos;
+    this.infoStream = indexWriterConfig.getInfoStream();
+    this.abortingExceptionConsumer = abortingExceptionConsumer;
 
-  public DefaultIndexingChain(DocumentsWriterPerThread docWriter) throws IOException {
-    this.docWriter = docWriter;
-    this.fieldInfos = docWriter.getFieldInfosBuilder();
-    this.docState = docWriter.docState;
-    this.bytesUsed = docWriter.bytesUsed;
-
-    final TermsHash termVectorsWriter;
-    if (docWriter.getSegmentInfo().getIndexSort() == null) {
-      storedFieldsConsumer = new StoredFieldsConsumer(docWriter);
-      termVectorsWriter = new TermVectorsConsumer(docWriter);
+    if (segmentInfo.getIndexSort() == null) {
+      storedFieldsConsumer = new StoredFieldsConsumer(indexWriterConfig.getCodec(), directory, segmentInfo);
+      termVectorsWriter = new TermVectorsConsumer(intBlockAllocator, byteBlockAllocator, directory, segmentInfo, indexWriterConfig.getCodec());
     } else {
-      storedFieldsConsumer = new SortingStoredFieldsConsumer(docWriter);
-      termVectorsWriter = new SortingTermVectorsConsumer(docWriter);
+      storedFieldsConsumer = new SortingStoredFieldsConsumer(indexWriterConfig.getCodec(), directory, segmentInfo);
+      termVectorsWriter = new SortingTermVectorsConsumer(intBlockAllocator, byteBlockAllocator, directory, segmentInfo, indexWriterConfig.getCodec());
     }
-    termsHash = new FreqProxTermsWriter(docWriter, termVectorsWriter);
+    termsHash = new FreqProxTermsWriter(intBlockAllocator, byteBlockAllocator, bytesUsed, termVectorsWriter);
+  }
+
+  private void onAbortingException(Throwable th) {
+    assert th != null;
+    this.hasHitAbortingException = true;
+    abortingExceptionConsumer.accept(th);
+  }
+
+  private LeafReader getDocValuesLeafReader() {
+    return new DocValuesLeafReader() {
+      @Override
+      public NumericDocValues getNumericDocValues(String field) {
+        PerField pf = getPerField(field);
+        if (pf == null) {
+          return null;
+        }
+        if (pf.fieldInfo.getDocValuesType() == DocValuesType.NUMERIC) {
+          return (NumericDocValues) pf.docValuesWriter.getDocValues();
+        }
+        return null;
+      }
+
+      @Override
+      public BinaryDocValues getBinaryDocValues(String field) {
+        PerField pf = getPerField(field);
+        if (pf == null) {
+          return null;
+        }
+        if (pf.fieldInfo.getDocValuesType() == DocValuesType.BINARY) {
+          return (BinaryDocValues) pf.docValuesWriter.getDocValues();
+        }
+        return null;
+      }
+
+      @Override
+      public SortedDocValues getSortedDocValues(String field) throws IOException {
+        PerField pf = getPerField(field);
+        if (pf == null) {
+          return null;
+        }
+        if (pf.fieldInfo.getDocValuesType() == DocValuesType.SORTED) {
+          return (SortedDocValues) pf.docValuesWriter.getDocValues();
+        }
+        return null;
+      }
+
+      @Override
+      public SortedNumericDocValues getSortedNumericDocValues(String field) throws IOException {
+        PerField pf = getPerField(field);
+        if (pf == null) {
+          return null;
+        }
+        if (pf.fieldInfo.getDocValuesType() == DocValuesType.SORTED_NUMERIC) {
+          return (SortedNumericDocValues) pf.docValuesWriter.getDocValues();
+        }
+        return null;
+      }
+
+      @Override
+      public SortedSetDocValues getSortedSetDocValues(String field) throws IOException {
+        PerField pf = getPerField(field);
+        if (pf == null) {
+          return null;
+        }
+        if (pf.fieldInfo.getDocValuesType() == DocValuesType.SORTED_SET) {
+          return (SortedSetDocValues) pf.docValuesWriter.getDocValues();
+        }
+        return null;
+      }
+
+      @Override
+      public FieldInfos getFieldInfos() {
+        return fieldInfos.finish();
+      }
+
+    };
   }
 
   private Sorter.DocMap maybeSortSegment(SegmentWriteState state) throws IOException {
@@ -101,23 +191,20 @@ final class DefaultIndexingChain extends DocConsumer {
       return null;
     }
 
-    List<Sorter.DocComparator> comparators = new ArrayList<>();
+    LeafReader docValuesReader = getDocValuesLeafReader();
+
+    List<IndexSorter.DocComparator> comparators = new ArrayList<>();
     for (int i = 0; i < indexSort.getSort().length; i++) {
       SortField sortField = indexSort.getSort()[i];
-      PerField perField = getPerField(sortField.getField());
-      if (perField != null && perField.docValuesWriter != null &&
-          finishedDocValues.contains(perField.fieldInfo.name) == false) {
-          perField.docValuesWriter.finish(state.segmentInfo.maxDoc());
-          Sorter.DocComparator cmp = perField.docValuesWriter.getDocComparator(state.segmentInfo.maxDoc(), sortField);
-          comparators.add(cmp);
-          finishedDocValues.add(perField.fieldInfo.name);
-      } else {
-        // safe to ignore, sort field with no values or already seen before
+      IndexSorter sorter = sortField.getIndexSorter();
+      if (sorter == null) {
+        throw new UnsupportedOperationException("Cannot sort index using sort field " + sortField);
       }
+      comparators.add(sorter.getDocComparator(docValuesReader, state.segmentInfo.maxDoc()));
     }
     Sorter sorter = new Sorter(indexSort);
     // returns null if the documents are already sorted
-    return sorter.sort(state.segmentInfo.maxDoc(), comparators.toArray(new Sorter.DocComparator[comparators.size()]));
+    return sorter.sort(state.segmentInfo.maxDoc(), comparators.toArray(new IndexSorter.DocComparator[0]));
   }
 
   @Override
@@ -129,29 +216,29 @@ final class DefaultIndexingChain extends DocConsumer {
     int maxDoc = state.segmentInfo.maxDoc();
     long t0 = System.nanoTime();
     writeNorms(state, sortMap);
-    if (docState.infoStream.isEnabled("IW")) {
-      docState.infoStream.message("IW", ((System.nanoTime()-t0)/1000000) + " msec to write norms");
+    if (infoStream.isEnabled("IW")) {
+      infoStream.message("IW", ((System.nanoTime()-t0)/1000000) + " msec to write norms");
     }
-    SegmentReadState readState = new SegmentReadState(state.directory, state.segmentInfo, state.fieldInfos, true, IOContext.READ, state.segmentSuffix, Collections.emptyMap());
+    SegmentReadState readState = new SegmentReadState(state.directory, state.segmentInfo, state.fieldInfos, IOContext.READ, state.segmentSuffix);
     
     t0 = System.nanoTime();
     writeDocValues(state, sortMap);
-    if (docState.infoStream.isEnabled("IW")) {
-      docState.infoStream.message("IW", ((System.nanoTime()-t0)/1000000) + " msec to write docValues");
+    if (infoStream.isEnabled("IW")) {
+      infoStream.message("IW", ((System.nanoTime()-t0)/1000000) + " msec to write docValues");
     }
 
     t0 = System.nanoTime();
     writePoints(state, sortMap);
-    if (docState.infoStream.isEnabled("IW")) {
-      docState.infoStream.message("IW", ((System.nanoTime()-t0)/1000000) + " msec to write points");
+    if (infoStream.isEnabled("IW")) {
+      infoStream.message("IW", ((System.nanoTime()-t0)/1000000) + " msec to write points");
     }
     
     // it's possible all docs hit non-aborting exceptions...
     t0 = System.nanoTime();
     storedFieldsConsumer.finish(maxDoc);
     storedFieldsConsumer.flush(state, sortMap);
-    if (docState.infoStream.isEnabled("IW")) {
-      docState.infoStream.message("IW", ((System.nanoTime()-t0)/1000000) + " msec to finish stored fields");
+    if (infoStream.isEnabled("IW")) {
+      infoStream.message("IW", ((System.nanoTime()-t0)/1000000) + " msec to finish stored fields");
     }
 
     t0 = System.nanoTime();
@@ -176,8 +263,8 @@ final class DefaultIndexingChain extends DocConsumer {
       }
       termsHash.flush(fieldsToFlush, state, sortMap, normsMergeInstance);
     }
-    if (docState.infoStream.isEnabled("IW")) {
-      docState.infoStream.message("IW", ((System.nanoTime()-t0)/1000000) + " msec to write postings and finish vectors");
+    if (infoStream.isEnabled("IW")) {
+      infoStream.message("IW", ((System.nanoTime()-t0)/1000000) + " msec to write postings and finish vectors");
     }
 
     // Important to save after asking consumer to flush so
@@ -185,9 +272,9 @@ final class DefaultIndexingChain extends DocConsumer {
     // FreqProxTermsWriter does this with
     // FieldInfo.storePayload.
     t0 = System.nanoTime();
-    docWriter.codec.fieldInfosFormat().write(state.directory, state.segmentInfo, "", state.fieldInfos, IOContext.DEFAULT);
-    if (docState.infoStream.isEnabled("IW")) {
-      docState.infoStream.message("IW", ((System.nanoTime()-t0)/1000000) + " msec to write fieldInfos");
+    indexWriterConfig.getCodec().fieldInfosFormat().write(state.directory, state.segmentInfo, "", state.fieldInfos, IOContext.DEFAULT);
+    if (infoStream.isEnabled("IW")) {
+      infoStream.message("IW", ((System.nanoTime()-t0)/1000000) + " msec to write fieldInfos");
     }
 
     return sortMap;
@@ -202,7 +289,7 @@ final class DefaultIndexingChain extends DocConsumer {
         PerField perField = fieldHash[i];
         while (perField != null) {
           if (perField.pointValuesWriter != null) {
-            if (perField.fieldInfo.getPointDataDimensionCount() == 0) {
+            if (perField.fieldInfo.getPointDimensionCount() == 0) {
               // BUG
               throw new AssertionError("segment=" + state.segmentInfo + ": field=\"" + perField.fieldInfo.name + "\" has no points but wrote them");
             }
@@ -217,7 +304,7 @@ final class DefaultIndexingChain extends DocConsumer {
 
             perField.pointValuesWriter.flush(state, sortMap, pointsWriter);
             perField.pointValuesWriter = null;
-          } else if (perField.fieldInfo.getPointDataDimensionCount() != 0) {
+          } else if (perField.fieldInfo.getPointDimensionCount() != 0) {
             // BUG
             throw new AssertionError("segment=" + state.segmentInfo + ": field=\"" + perField.fieldInfo.name + "\" has points but did not write them");
           }
@@ -239,7 +326,6 @@ final class DefaultIndexingChain extends DocConsumer {
 
   /** Writes all buffered doc values (called from {@link #flush}). */
   private void writeDocValues(SegmentWriteState state, Sorter.DocMap sortMap) throws IOException {
-    int maxDoc = state.segmentInfo.maxDoc();
     DocValuesConsumer dvConsumer = null;
     boolean success = false;
     try {
@@ -255,10 +341,6 @@ final class DefaultIndexingChain extends DocConsumer {
               // lazy init
               DocValuesFormat fmt = state.segmentInfo.getCodec().docValuesFormat();
               dvConsumer = fmt.fieldsConsumer(state);
-            }
-
-            if (finishedDocValues.contains(perField.fieldInfo.name) == false) {
-              perField.docValuesWriter.finish(maxDoc);
             }
             perField.docValuesWriter.flush(state, sortMap, dvConsumer);
             perField.docValuesWriter = null;
@@ -366,7 +448,7 @@ final class DefaultIndexingChain extends DocConsumer {
     try {
       storedFieldsConsumer.startDocument(docID);
     } catch (Throwable th) {
-      docWriter.onAbortingException(th);
+      onAbortingException(th);
       throw th;
     }
   }
@@ -377,13 +459,13 @@ final class DefaultIndexingChain extends DocConsumer {
     try {
       storedFieldsConsumer.finishDocument();
     } catch (Throwable th) {
-      docWriter.onAbortingException(th);
+      onAbortingException(th);
       throw th;
     }
   }
 
   @Override
-  public void processDocument() throws IOException {
+  public void processDocument(int docID, Iterable<? extends IndexableField> document) throws IOException {
 
     // How many indexed field names we've seen (collapses
     // multiple field instances by the same name):
@@ -400,33 +482,33 @@ final class DefaultIndexingChain extends DocConsumer {
 
     termsHash.startDocument();
 
-    startStoredFields(docState.docID);
+    startStoredFields(docID);
     try {
-      for (IndexableField field : docState.doc) {
-        fieldCount = processField(field, fieldGen, fieldCount);
+      for (IndexableField field : document) {
+        fieldCount = processField(docID, field, fieldGen, fieldCount);
       }
     } finally {
-      if (docWriter.hasHitAbortingException() == false) {
+      if (hasHitAbortingException == false) {
         // Finish each indexed field name seen in the document:
         for (int i=0;i<fieldCount;i++) {
-          fields[i].termsHashPerField.flush();
-          fields[i].finish();
+          fields[i].termsHashPerField.flush(docID);
+          fields[i].finish(docID);
         }
         finishStoredFields();
       }
     }
 
     try {
-      termsHash.finishDocument();
+      termsHash.finishDocument(docID);
     } catch (Throwable th) {
       // Must abort, on the possibility that on-disk term
       // vectors are now corrupt:
-      docWriter.onAbortingException(th);
+      abortingExceptionConsumer.accept(th);
       throw th;
     }
   }
 
-  private int processField(IndexableField field, long fieldGen, int fieldCount) throws IOException {
+  private int processField(int docID, IndexableField field, long fieldGen, int fieldCount) throws IOException {
     String fieldName = field.name();
     IndexableFieldType fieldType = field.fieldType();
 
@@ -440,7 +522,7 @@ final class DefaultIndexingChain extends DocConsumer {
     if (fieldType.indexOptions() != IndexOptions.NONE) {
       fp = getOrAddField(fieldName, fieldType, true);
       boolean first = fp.fieldGen != fieldGen;
-      fp.invert(field, first);
+      fp.invert(docID, field, first);
 
       if (first) {
         fields[fieldCount++] = fp;
@@ -463,7 +545,7 @@ final class DefaultIndexingChain extends DocConsumer {
         try {
           storedFieldsConsumer.writeField(fp.fieldInfo, field);
         } catch (Throwable th) {
-          docWriter.onAbortingException(th);
+          onAbortingException(th);
           throw th;
         }
       }
@@ -477,13 +559,13 @@ final class DefaultIndexingChain extends DocConsumer {
       if (fp == null) {
         fp = getOrAddField(fieldName, fieldType, false);
       }
-      indexDocValue(fp, dvType, field);
+      indexDocValue(docID, fp, dvType, field);
     }
-    if (fieldType.pointDataDimensionCount() != 0) {
+    if (fieldType.pointDimensionCount() != 0) {
       if (fp == null) {
         fp = getOrAddField(fieldName, fieldType, false);
       }
-      indexPoint(fp, field);
+      indexPoint(docID, fp, field);
     }
     
     return fieldCount;
@@ -509,85 +591,96 @@ final class DefaultIndexingChain extends DocConsumer {
   }
 
   /** Called from processDocument to index one field's point */
-  private void indexPoint(PerField fp, IndexableField field) throws IOException {
-    int pointDataDimensionCount = field.fieldType().pointDataDimensionCount();
+  private void indexPoint(int docID, PerField fp, IndexableField field) {
+    int pointDimensionCount = field.fieldType().pointDimensionCount();
     int pointIndexDimensionCount = field.fieldType().pointIndexDimensionCount();
 
     int dimensionNumBytes = field.fieldType().pointNumBytes();
 
     // Record dimensions for this field; this setter will throw IllegalArgExc if
     // the dimensions were already set to something different:
-    if (fp.fieldInfo.getPointDataDimensionCount() == 0) {
-      fieldInfos.globalFieldNumbers.setDimensions(fp.fieldInfo.number, fp.fieldInfo.name, pointDataDimensionCount, pointIndexDimensionCount, dimensionNumBytes);
+    if (fp.fieldInfo.getPointDimensionCount() == 0) {
+      fieldInfos.globalFieldNumbers.setDimensions(fp.fieldInfo.number, fp.fieldInfo.name, pointDimensionCount, pointIndexDimensionCount, dimensionNumBytes);
     }
 
-    fp.fieldInfo.setPointDimensions(pointDataDimensionCount, pointIndexDimensionCount, dimensionNumBytes);
+    fp.fieldInfo.setPointDimensions(pointDimensionCount, pointIndexDimensionCount, dimensionNumBytes);
 
     if (fp.pointValuesWriter == null) {
-      fp.pointValuesWriter = new PointValuesWriter(docWriter, fp.fieldInfo);
+      fp.pointValuesWriter = new PointValuesWriter(byteBlockAllocator, bytesUsed, fp.fieldInfo);
     }
-    fp.pointValuesWriter.addPackedValue(docState.docID, field.binaryValue());
+    fp.pointValuesWriter.addPackedValue(docID, field.binaryValue());
   }
 
-  private void validateIndexSortDVType(Sort indexSort, String fieldName, DocValuesType dvType) {
+  private void validateIndexSortDVType(Sort indexSort, String fieldToValidate, DocValuesType dvType) throws IOException {
     for (SortField sortField : indexSort.getSort()) {
-      if (sortField.getField().equals(fieldName)) {
-        switch (dvType) {
-          case NUMERIC:
-            if (sortField.getType().equals(SortField.Type.INT) == false &&
-                  sortField.getType().equals(SortField.Type.LONG) == false &&
-                  sortField.getType().equals(SortField.Type.FLOAT) == false &&
-                  sortField.getType().equals(SortField.Type.DOUBLE) == false) {
-              throw new IllegalArgumentException("invalid doc value type:" + dvType + " for sortField:" + sortField);
-            }
-            break;
-
-          case BINARY:
-            throw new IllegalArgumentException("invalid doc value type:" + dvType + " for sortField:" + sortField);
-
-          case SORTED:
-            if (sortField.getType().equals(SortField.Type.STRING) == false) {
-              throw new IllegalArgumentException("invalid doc value type:" + dvType + " for sortField:" + sortField);
-            }
-            break;
-
-          case SORTED_NUMERIC:
-            if (sortField instanceof SortedNumericSortField == false) {
-              throw new IllegalArgumentException("invalid doc value type:" + dvType + " for sortField:" + sortField);
-            }
-            break;
-
-          case SORTED_SET:
-            if (sortField instanceof SortedSetSortField == false) {
-              throw new IllegalArgumentException("invalid doc value type:" + dvType + " for sortField:" + sortField);
-            }
-            break;
-
-          default:
-            throw new IllegalArgumentException("invalid doc value type:" + dvType + " for sortField:" + sortField);
-        }
-        break;
+      IndexSorter sorter = sortField.getIndexSorter();
+      if (sorter == null) {
+        throw new IllegalStateException("Cannot sort index with sort order " + sortField);
       }
+      sorter.getDocComparator(new DocValuesLeafReader() {
+        @Override
+        public NumericDocValues getNumericDocValues(String field) {
+          if (Objects.equals(field, fieldToValidate) && dvType != DocValuesType.NUMERIC) {
+            throw new IllegalArgumentException("SortField " + sortField + " expected field [" + field + "] to be NUMERIC but it is [" + dvType + "]");
+          }
+          return DocValues.emptyNumeric();
+        }
+
+        @Override
+        public BinaryDocValues getBinaryDocValues(String field) {
+          if (Objects.equals(field, fieldToValidate) && dvType != DocValuesType.BINARY) {
+            throw new IllegalArgumentException("SortField " + sortField + " expected field [" + field + "] to be BINARY but it is [" + dvType + "]");
+          }
+          return DocValues.emptyBinary();
+        }
+
+        @Override
+        public SortedDocValues getSortedDocValues(String field) {
+          if (Objects.equals(field, fieldToValidate) && dvType != DocValuesType.SORTED) {
+            throw new IllegalArgumentException("SortField " + sortField + " expected field [" + field + "] to be SORTED but it is [" + dvType + "]");
+          }
+          return DocValues.emptySorted();
+        }
+
+        @Override
+        public SortedNumericDocValues getSortedNumericDocValues(String field) {
+          if (Objects.equals(field, fieldToValidate) && dvType != DocValuesType.SORTED_NUMERIC) {
+            throw new IllegalArgumentException("SortField " + sortField + " expected field [" + field + "] to be SORTED_NUMERIC but it is [" + dvType + "]");
+          }
+          return DocValues.emptySortedNumeric();
+        }
+
+        @Override
+        public SortedSetDocValues getSortedSetDocValues(String field) {
+          if (Objects.equals(field, fieldToValidate) && dvType != DocValuesType.SORTED_SET) {
+            throw new IllegalArgumentException("SortField " + sortField + " expected field [" + field + "] to be SORTED_SET but it is [" + dvType + "]");
+          }
+          return DocValues.emptySortedSet();
+        }
+
+        @Override
+        public FieldInfos getFieldInfos() {
+          throw new UnsupportedOperationException();
+        }
+      }, 0);
     }
   }
 
   /** Called from processDocument to index one field's doc value */
-  private void indexDocValue(PerField fp, DocValuesType dvType, IndexableField field) throws IOException {
+  private void indexDocValue(int docID, PerField fp, DocValuesType dvType, IndexableField field) throws IOException {
 
     if (fp.fieldInfo.getDocValuesType() == DocValuesType.NONE) {
       // This is the first time we are seeing this field indexed with doc values, so we
       // now record the DV type so that any future attempt to (illegally) change
       // the DV type of this field, will throw an IllegalArgExc:
-      if (docWriter.getSegmentInfo().getIndexSort() != null) {
-        final Sort indexSort = docWriter.getSegmentInfo().getIndexSort();
+      if (indexWriterConfig.getIndexSort() != null) {
+        final Sort indexSort = indexWriterConfig.getIndexSort();
         validateIndexSortDVType(indexSort, fp.fieldInfo.name, dvType);
       }
       fieldInfos.globalFieldNumbers.setDocValuesType(fp.fieldInfo.number, fp.fieldInfo.name, dvType);
-
     }
-    fp.fieldInfo.setDocValuesType(dvType);
 
-    int docID = docState.docID;
+    fp.fieldInfo.setDocValuesType(dvType);
 
     switch(dvType) {
 
@@ -668,7 +761,8 @@ final class DefaultIndexingChain extends DocConsumer {
         attributes.forEach((k, v) -> fi.putAttribute(k, v));
       }
 
-      fp = new PerField(docWriter.getIndexCreatedVersionMajor(), fi, invert);
+      fp = new PerField(indexCreatedVersionMajor, fi, invert,
+          indexWriterConfig.getSimilarity(), indexWriterConfig.getInfoStream(), indexWriterConfig.getAnalyzer());
       fp.next = fieldHash[hashPos];
       fieldHash[hashPos] = fp;
       totalFieldCount++;
@@ -703,6 +797,17 @@ final class DefaultIndexingChain extends DocConsumer {
     info.setIndexOptions(indexOptions);
   }
 
+  @Override
+  public long ramBytesUsed() {
+    return bytesUsed.get() + storedFieldsConsumer.accountable.ramBytesUsed()
+        + termVectorsWriter.accountable.ramBytesUsed();
+  }
+
+  @Override
+  public Collection<Accountable> getChildResources() {
+    return Arrays.asList(storedFieldsConsumer.accountable, termVectorsWriter.accountable);
+  }
+
   /** NOTE: not static: accesses at least docState, termsHash. */
   private final class PerField implements Comparable<PerField> {
 
@@ -715,7 +820,7 @@ final class DefaultIndexingChain extends DocConsumer {
 
     // Non-null if this field ever had doc values in this
     // segment:
-    DocValuesWriter docValuesWriter;
+    DocValuesWriter<?> docValuesWriter;
 
     // Non-null if this field ever had points in this segment:
     PointValuesWriter pointValuesWriter;
@@ -732,11 +837,15 @@ final class DefaultIndexingChain extends DocConsumer {
     
     // reused
     TokenStream tokenStream;
+    private final InfoStream infoStream;
+    private final Analyzer analyzer;
 
-    public PerField(int indexCreatedVersionMajor, FieldInfo fieldInfo, boolean invert) {
+    PerField(int indexCreatedVersionMajor, FieldInfo fieldInfo, boolean invert, Similarity similarity, InfoStream infoStream, Analyzer analyzer) {
       this.indexCreatedVersionMajor = indexCreatedVersionMajor;
       this.fieldInfo = fieldInfo;
-      similarity = docState.similarity;
+      this.similarity = similarity;
+      this.infoStream = infoStream;
+      this.analyzer = analyzer;
       if (invert) {
         setInvertState();
       }
@@ -748,7 +857,7 @@ final class DefaultIndexingChain extends DocConsumer {
       if (fieldInfo.omitsNorms() == false) {
         assert norms == null;
         // Even if no documents actually succeed in setting a norm, we still write norms for this segment:
-        norms = new NormValuesWriter(fieldInfo, docState.docWriter.bytesUsed);
+        norms = new NormValuesWriter(fieldInfo, bytesUsed);
       }
     }
 
@@ -757,7 +866,7 @@ final class DefaultIndexingChain extends DocConsumer {
       return this.fieldInfo.name.compareTo(other.fieldInfo.name);
     }
 
-    public void finish() throws IOException {
+    public void finish(int docID) throws IOException {
       if (fieldInfo.omitsNorms() == false) {
         long normValue;
         if (invertState.length == 0) {
@@ -771,7 +880,7 @@ final class DefaultIndexingChain extends DocConsumer {
             throw new IllegalStateException("Similarity " + similarity + " return 0 for non-empty field");
           }
         }
-        norms.addValue(docState.docID, normValue);
+        norms.addValue(docID, normValue);
       }
 
       termsHashPerField.finish();
@@ -780,7 +889,7 @@ final class DefaultIndexingChain extends DocConsumer {
     /** Inverts one field for one document; first is true
      *  if this is the first time we are seeing this field
      *  name in this document. */
-    public void invert(IndexableField field, boolean first) throws IOException {
+    public void invert(int docID, IndexableField field, boolean first) throws IOException {
       if (first) {
         // First time we're seeing this field (indexed) in
         // this document:
@@ -796,7 +905,7 @@ final class DefaultIndexingChain extends DocConsumer {
         fieldInfo.setOmitsNorms();
       }
 
-      final boolean analyzed = fieldType.tokenized() && docState.analyzer != null;
+      final boolean analyzed = fieldType.tokenized() && analyzer != null;
         
       /*
        * To assist people in tracking down problems in analysis components, we wish to write the field name to the infostream
@@ -804,7 +913,7 @@ final class DefaultIndexingChain extends DocConsumer {
        * but rather a finally that takes note of the problem.
        */
       boolean succeededInProcessingField = false;
-      try (TokenStream stream = tokenStream = field.tokenStream(docState.analyzer, tokenStream)) {
+      try (TokenStream stream = tokenStream = field.tokenStream(analyzer, tokenStream)) {
         // reset the TokenStream to the first token
         stream.reset();
         invertState.setAttributeSource(stream);
@@ -860,19 +969,19 @@ final class DefaultIndexingChain extends DocConsumer {
           // corrupt and should not be flushed to a
           // new segment:
           try {
-            termsHashPerField.add();
+            termsHashPerField.add(invertState.termAttribute.getBytesRef(), docID);
           } catch (MaxBytesLengthExceededException e) {
             byte[] prefix = new byte[30];
             BytesRef bigTerm = invertState.termAttribute.getBytesRef();
             System.arraycopy(bigTerm.bytes, bigTerm.offset, prefix, 0, 30);
-            String msg = "Document contains at least one immense term in field=\"" + fieldInfo.name + "\" (whose UTF8 encoding is longer than the max length " + DocumentsWriterPerThread.MAX_TERM_LENGTH_UTF8 + "), all of which were skipped.  Please correct the analyzer to not produce such terms.  The prefix of the first immense term is: '" + Arrays.toString(prefix) + "...', original message: " + e.getMessage();
-            if (docState.infoStream.isEnabled("IW")) {
-              docState.infoStream.message("IW", "ERROR: " + msg);
+            String msg = "Document contains at least one immense term in field=\"" + fieldInfo.name + "\" (whose UTF8 encoding is longer than the max length " + IndexWriter.MAX_TERM_LENGTH + "), all of which were skipped.  Please correct the analyzer to not produce such terms.  The prefix of the first immense term is: '" + Arrays.toString(prefix) + "...', original message: " + e.getMessage();
+            if (infoStream.isEnabled("IW")) {
+              infoStream.message("IW", "ERROR: " + msg);
             }
             // Document will be deleted above:
             throw new IllegalArgumentException(msg, e);
           } catch (Throwable th) {
-            docWriter.onAbortingException(th);
+            onAbortingException(th);
             throw th;
           }
         }
@@ -888,14 +997,14 @@ final class DefaultIndexingChain extends DocConsumer {
         /* if there is an exception coming through, we won't set this to true here:*/
         succeededInProcessingField = true;
       } finally {
-        if (!succeededInProcessingField && docState.infoStream.isEnabled("DW")) {
-          docState.infoStream.message("DW", "An exception was thrown while processing field " + fieldInfo.name);
+        if (!succeededInProcessingField && infoStream.isEnabled("DW")) {
+          infoStream.message("DW", "An exception was thrown while processing field " + fieldInfo.name);
         }
       }
 
       if (analyzed) {
-        invertState.position += docState.analyzer.getPositionIncrementGap(fieldInfo.name);
-        invertState.offset += docState.analyzer.getOffsetGap(fieldInfo.name);
+        invertState.position += analyzer.getPositionIncrementGap(fieldInfo.name);
+        invertState.offset += analyzer.getOffsetGap(fieldInfo.name);
       }
     }
   }
@@ -909,9 +1018,33 @@ final class DefaultIndexingChain extends DocConsumer {
           return null;
         }
 
-        return perField.docValuesWriter.getDocIdSet();
+        return perField.docValuesWriter.getDocValues();
       }
     }
     return null;
   }
+
+  private static class IntBlockAllocator extends IntBlockPool.Allocator {
+    private final Counter bytesUsed;
+
+    IntBlockAllocator(Counter bytesUsed) {
+      super(IntBlockPool.INT_BLOCK_SIZE);
+      this.bytesUsed = bytesUsed;
+    }
+
+    /* Allocate another int[] from the shared pool */
+    @Override
+    public int[] getIntBlock() {
+      int[] b = new int[IntBlockPool.INT_BLOCK_SIZE];
+      bytesUsed.addAndGet(IntBlockPool.INT_BLOCK_SIZE * Integer.BYTES);
+      return b;
+    }
+
+    @Override
+    public void recycleIntBlocks(int[][] blocks, int offset, int length) {
+      bytesUsed.addAndGet(-(length * (IntBlockPool.INT_BLOCK_SIZE * Integer.BYTES)));
+    }
+
+  }
+
 }

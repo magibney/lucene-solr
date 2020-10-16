@@ -47,6 +47,8 @@ import org.slf4j.LoggerFactory;
 /**
  * This handler makes it easier to retrieve a history of autoscaling events from the .system
  * collection.
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 public class AutoscalingHistoryHandler extends RequestHandlerBase implements PermissionNameProvider {
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
@@ -100,6 +102,7 @@ public class AutoscalingHistoryHandler extends RequestHandlerBase implements Per
   }
 
   @Override
+  @SuppressWarnings({"unchecked"})
   public void handleRequestBody(SolrQueryRequest req, SolrQueryResponse rsp) throws Exception {
     ModifiableSolrParams params = new ModifiableSolrParams(req.getParams());
     String collection = params.get(SYSTEM_COLLECTION_PARAM, CollectionAdminParams.SYSTEM_COLL);

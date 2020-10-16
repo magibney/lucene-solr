@@ -27,6 +27,8 @@ import org.apache.zookeeper.CreateMode;
 
 /**
  * Immutable representation of binary data with version.
+ *
+ * @deprecated to be removed in Solr 9.0 (see SOLR-14656)
  */
 public class VersionedData implements MapWriter {
   private final int version;
@@ -90,5 +92,10 @@ public class VersionedData implements MapWriter {
         Arrays.equals(data, that.data) &&
         Objects.equals(owner, that.owner) &&
         mode == that.mode;
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(version, owner);
   }
 }

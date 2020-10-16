@@ -20,9 +20,10 @@ package org.apache.lucene.index;
 import java.io.IOException;
 
 import org.apache.lucene.search.DocIdSetIterator;
+import org.apache.lucene.util.Accountable;
 
-abstract class DocConsumer {
-  abstract void processDocument() throws IOException;
+abstract class DocConsumer implements Accountable {
+  abstract void processDocument(int docId, Iterable<? extends IndexableField> document) throws IOException;
   abstract Sorter.DocMap flush(final SegmentWriteState state) throws IOException;
   abstract void abort() throws IOException;
 
