@@ -360,6 +360,13 @@ public class PreAnalyzedField extends TextField implements HasImplicitIndexAnaly
      * Parses the input reader and adds attributes specified there.
      */
     private void decodeInput(Reader reader) throws IOException {
+      // We have to manually call clearAttributes() here, before the attributes are removed.
+      // Attribute removal is important for reuse, but also means that the clearAttributes()
+      // call in parser.parse(reader, this) has no effect (hence us calling it here).
+      // NOTE: I don't understand why this appears to have become an issue sometime between
+      // da8ea706826..9805b125dc8. There are other places we could call this, but placing it near
+      // removeAllAttributes() seems to make sense.
+      clearAttributes();
       removeAllAttributes();  // reset attributes to the empty set
       cachedStates.clear();
       stringValue = null;
